@@ -1,0 +1,159 @@
+/* Heading font */
+.font-heading {
+  font-family: 'Outfit', sans-serif;
+}
+
+/* Body font */
+.font-body {
+  font-family: 'IBM Plex Sans', sans-serif;
+}
+
+/* Mono font */
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Video container */
+.video-container {
+  background: #000;
+  position: relative;
+  overflow: hidden;
+}
+
+.video-container video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Terminal logs panel */
+.logs-terminal {
+  background: #0A0A0A;
+  color: #4ADE80;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.logs-terminal .log-entry {
+  animation: logSlideIn 0.2s ease-out;
+}
+
+@keyframes logSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Black screen overlay */
+.black-screen-overlay {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: none;
+}
+
+/* Block input overlay */
+.block-input-overlay {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 9998;
+  cursor: not-allowed;
+}
+
+/* Viewer cursor indicator on host */
+.viewer-cursor {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #002FA7;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 10;
+  transition: left 0.05s linear, top 0.05s linear;
+}
+
+.viewer-cursor::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  background: #002FA7;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Control capture area */
+.capture-area {
+  cursor: crosshair;
+  outline: none;
+}
+
+.capture-area:focus {
+  outline: 2px solid #002FA7;
+  outline-offset: -2px;
+}
+
+/* Connection pulse */
+.pulse-connected {
+  animation: pulseGreen 2s infinite;
+}
+
+@keyframes pulseGreen {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Status dot */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.connected {
+  background: #16A34A;
+  box-shadow: 0 0 6px #16A34A;
+}
+
+.status-dot.waiting {
+  background: #EAB308;
+  box-shadow: 0 0 6px #EAB308;
+  animation: pulseYellow 1.5s infinite;
+}
+
+.status-dot.disconnected {
+  background: #E11D48;
+}
+
+.status-dot.streaming {
+  background: #16A34A;
+  box-shadow: 0 0 8px #16A34A;
+  animation: pulseGreen 1.5s infinite;
+}
+
+@keyframes pulseYellow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Agent active pulse */
+.agent-pulse {
+  animation: agentPulse 2s ease-in-out infinite;
+}
+
+@keyframes agentPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.15); }
+}
