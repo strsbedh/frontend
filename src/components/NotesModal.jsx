@@ -22,6 +22,7 @@ export default function NotesModal({ deviceId, deviceName, open, onClose }) {
     if (open && deviceId) {
       fetchNote();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, deviceId]);
 
   const calculateTimeAgo = (isoTimestamp) => {

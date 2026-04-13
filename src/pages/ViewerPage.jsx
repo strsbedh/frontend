@@ -406,6 +406,7 @@ export default function ViewerPage() {
     }));
     console.log('[viewer] 📤 Answer sent to host');
     addLog('system', 'Answer sent');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addLog]);
 
   // ── Signaling message router ──
@@ -616,6 +617,28 @@ export default function ViewerPage() {
     e.preventDefault();
     e.stopPropagation();
 
+    // Remap Alt+[key] → Win+[key] on host when control is active
+    // (Win key can't be captured by browser — Alt combos are the best proxy)
+    if (e.altKey && !e.ctrlKey && !e.shiftKey) {
+      const winMap = {
+        'r': 'win+r',   // Alt+R → Win+R (Run)
+        'd': 'win+d',   // Alt+D → Win+D (Desktop)
+        'e': 'win+e',   // Alt+E → Win+E (Explorer)
+        's': 'win+s',   // Alt+S → Win+S (Search)
+        'i': 'win+i',   // Alt+I → Win+I (Settings)
+        'x': 'win+x',   // Alt+X → Win+X (Quick menu)
+        'm': 'win+m',   // Alt+M → Win+M (Minimize all)
+        'p': 'win+p',   // Alt+P → Win+P (Project)
+        'v': 'win+v',   // Alt+V → Win+V (Clipboard history)
+      };
+      const mapped = winMap[e.key.toLowerCase()];
+      if (mapped && dataChannelRef.current?.readyState === 'open') {
+        dataChannelRef.current.send(JSON.stringify({ type: 'win_shortcut', keys: mapped }));
+        addLog('sent', `Alt+${e.key.toUpperCase()} → ${mapped}`);
+        return;
+      }
+    }
+
     // Special case: Ctrl+V — push viewer clipboard to host FIRST, then send the keystroke
     if (e.ctrlKey && e.key === 'v') {
       try {
@@ -624,9 +647,7 @@ export default function ViewerPage() {
           text = await navigator.clipboard.readText();
         }
         if (text && dataChannelRef.current?.readyState === 'open') {
-          // Push clipboard to host immediately
           dataChannelRef.current.send(JSON.stringify({ type: 'clipboard', text }));
-          // Wait for host to receive and set clipboard, then send Ctrl+V
           await new Promise(r => setTimeout(r, 150));
         }
       } catch {
@@ -960,6 +981,9 @@ export default function ViewerPage() {
               <div className="bg-white border border-zinc-200 divide-y divide-zinc-100">
                 <div className="px-5 py-3">
                   <span className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-500">Win Shortcuts</span>
+                </div>
+                <div className="px-5 py-2 bg-zinc-50">
+                  <p className="text-xs text-zinc-400">Tip: <span className="font-mono text-zinc-500">Alt+R</span> → Win+R on host (when Take Control is ON)</p>
                 </div>
                 <div className="p-3 grid grid-cols-2 gap-1.5">
                   {[

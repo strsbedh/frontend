@@ -1,17 +1,55 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MonitorSmartphone, Wifi, WifiOff, ArrowLeft, RefreshCw, PlugZap, Monitor } from 'lucide-react';
+import { MonitorSmartphone, Wifi, WifiOff, ArrowLeft, RefreshCw, PlugZap, Monitor, Pencil, Check, X } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../utils/webrtc';
 import NotesModal from '../components/NotesModal';
 import { Dialog, DialogContent } from '../components/ui/dialog';
 
-function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotClick, onRefreshScreenshot }) {
+function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotClick, onRefreshScreenshot, onRename }) {
   const isOnline = device.status === 'online';
+  const [editing, setEditing] = useState(false);
+  const [nameInput, setNameInput] = useState(device.device_name);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef(null);
+
+  // Sync if device name changes externally
+  useEffect(() => { setNameInput(device.device_name); }, [device.device_name]);
+
+  const startEdit = (e) => {
+    e.stopPropagation();
+    setEditing(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setNameInput(device.device_name);
+  };
+
+  const saveEdit = async () => {
+    const trimmed = nameInput.trim();
+    if (!trimmed || trimmed === device.device_name) { cancelEdit(); return; }
+    setSaving(true);
+    try {
+      await onRename(device.device_id, trimmed);
+      setEditing(false);
+    } catch {
+      setNameInput(device.device_name);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') saveEdit();
+    if (e.key === 'Escape') cancelEdit();
+  };
 
   return (
     <div
-      className={`bg-white border ${isOnline ? 'border-zinc-200 hover:border-zinc-300' : 'border-zinc-100 opacity-60'} overflow-hidden transition-all`}
+      className={`bg-white border group ${isOnline ? 'border-zinc-200 hover:border-zinc-300' : 'border-zinc-100 opacity-60'} overflow-hidden transition-all`}
       data-testid={`device-card-${device.device_id}`}
     >
       {/* Screenshot Thumbnail */}
@@ -65,13 +103,43 @@ function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotC
       {/* Device Info */}
       <div className="p-5">
         <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
             {isOnline ? (
-              <Wifi className="w-4 h-4 text-green-500" strokeWidth={1.5} />
+              <Wifi className="w-4 h-4 text-green-500 flex-shrink-0" strokeWidth={1.5} />
             ) : (
-              <WifiOff className="w-4 h-4 text-zinc-300" strokeWidth={1.5} />
+              <WifiOff className="w-4 h-4 text-zinc-300 flex-shrink-0" strokeWidth={1.5} />
             )}
-            <span className="font-medium text-zinc-900 text-sm">{device.device_name}</span>
+            {editing ? (
+              <div className="flex items-center gap-1 flex-1 min-w-0">
+                <input
+                  ref={inputRef}
+                  value={nameInput}
+                  onChange={e => setNameInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  disabled={saving}
+                  className="text-sm font-medium text-zinc-900 border border-blue-400 rounded px-1.5 py-0.5 flex-1 min-w-0 outline-none focus:ring-1 focus:ring-blue-400"
+                  maxLength={100}
+                  autoFocus
+                />
+                <button onClick={saveEdit} disabled={saving} className="text-green-600 hover:text-green-700 flex-shrink-0" title="Save">
+                  <Check className="w-3.5 h-3.5" strokeWidth={2} />
+                </button>
+                <button onClick={cancelEdit} disabled={saving} className="text-zinc-400 hover:text-zinc-600 flex-shrink-0" title="Cancel">
+                  <X className="w-3.5 h-3.5" strokeWidth={2} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                <span className="font-medium text-zinc-900 text-sm truncate">{device.device_name}</span>
+                <button
+                  onClick={startEdit}
+                  className="text-zinc-300 hover:text-zinc-500 transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+                  title="Rename device"
+                >
+                  <Pencil className="w-3 h-3" strokeWidth={1.5} />
+                </button>
+              </div>
+            )}
           </div>
           <span
             className={`text-[10px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 ${
@@ -118,6 +186,12 @@ export default function DashboardPage() {
   const [notesModalOpen, setNotesModalOpen] = useState(false);
   const [screenshotModalOpen, setScreenshotModalOpen] = useState(false);
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
+  const [showViewerBanner, setShowViewerBanner] = useState(false);
+
+  // Launch Electron viewer app via rdviewer:// protocol — no browser fallback
+  const handleConnect = useCallback((deviceId) => {
+    window.location.href = `rdviewer://connect/${deviceId}`;
+  }, []);
 
   const fetchScreenshot = useCallback(async (deviceId) => {
     try {
@@ -205,6 +279,14 @@ export default function DashboardPage() {
     setSelectedScreenshot(null);
   };
 
+  const handleRename = useCallback(async (deviceId, newName) => {
+    await axios.patch(`${API_URL}/devices/${deviceId}/rename`, { device_name: newName });
+    // Update local state immediately
+    setDevices(prev => prev.map(d =>
+      d.device_id === deviceId ? { ...d, device_name: newName } : d
+    ));
+  }, []);
+
   const handleRefreshScreenshot = async (device) => {
     try {
       console.log(`[dashboard] 📸 Triggering manual screenshot refresh for ${device.device_id}`);
@@ -231,6 +313,28 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-zinc-50" data-testid="dashboard-page">
+      {/* Viewer Agent download banner */}
+      {showViewerBanner && (
+        <div className="bg-blue-50 border-b border-blue-200 px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3 text-sm text-blue-800">
+            <span>💡 Install the <strong>Electron Viewer App</strong> for full Win key support (Win+R, Win+D, etc.)</span>
+            <a
+              href={process.env.REACT_APP_VIEWER_AGENT_DOWNLOAD_URL || '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-medium hover:text-blue-900"
+            >
+              Download
+            </a>
+          </div>
+          <button
+            onClick={() => { setShowViewerBanner(false); sessionStorage.setItem('viewer-agent-dismissed', '1'); }}
+            className="text-blue-500 hover:text-blue-700 text-lg leading-none"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {/* Header */}
       <header className="bg-white/90 backdrop-blur-xl border-b border-zinc-200 sticky top-0 z-50">
         <div className="max-w-[1200px] mx-auto px-4 md:px-8 py-3 flex items-center justify-between">
@@ -283,10 +387,11 @@ export default function DashboardPage() {
                       key={device.device_id}
                       device={device}
                       screenshot={screenshots[device.device_id]}
-                      onConnect={() => navigate(`/viewer/${device.device_id}`)}
+                      onConnect={() => handleConnect(device.device_id)}
                       onNotesClick={() => handleNotesClick(device)}
                       onScreenshotClick={() => handleScreenshotClick(device)}
                       onRefreshScreenshot={() => handleRefreshScreenshot(device)}
+                      onRename={handleRename}
                     />
                   ))}
                 </div>
@@ -309,6 +414,7 @@ export default function DashboardPage() {
                       screenshot={screenshots[device.device_id]}
                       onNotesClick={() => handleNotesClick(device)}
                       onScreenshotClick={() => handleScreenshotClick(device)}
+                      onRename={handleRename}
                     />
                   ))}
                 </div>
