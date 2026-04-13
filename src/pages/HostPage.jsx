@@ -321,6 +321,24 @@ async function agentCreateOffer() {
         console.log('[host] ⊞ Windows shortcut:', msg.keys);
         if (IS_ELECTRON) window.electronAPI.handleControl({ type: 'win_shortcut', keys: msg.keys });
       }
+
+      // Viewer requesting credential prompt on host
+      if (msg.type === 'request_credentials') {
+        console.log('[host] 🔑 Viewer requested credential prompt');
+        if (IS_ELECTRON && window.electronAPI) {
+          window.electronAPI.requestCredentials().then(result => {
+            // Send result back to viewer via DataChannel
+            if (agent.dc?.readyState === 'open') {
+              agent.dc.send(JSON.stringify({
+                type: 'credential_result',
+                verified: result.verified,
+                credential: result.verified ? result.credential : null,
+                username: result.username || '',
+              }));
+            }
+          });
+        }
+      }
     } catch (err) {
       console.error('[host] ❌ Error parsing DataChannel message:', err);
     }

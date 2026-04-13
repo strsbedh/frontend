@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MonitorSmartphone, Wifi, WifiOff, ArrowLeft, RefreshCw, PlugZap, Monitor, Pencil, Check, X } from 'lucide-react';
+import { MonitorSmartphone, Wifi, WifiOff, ArrowLeft, RefreshCw, PlugZap, Monitor, Pencil, Check, X, Key, Eye, EyeOff } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../utils/webrtc';
 import NotesModal from '../components/NotesModal';
@@ -82,6 +82,19 @@ function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotC
           title="View notes"
         >
           <span className="text-base">📝</span>
+        </button>
+
+        {/* Credentials Icon Button - Bottom Left (next to notes) */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onCredentialClick && onCredentialClick();
+          }}
+          className="absolute bottom-2 left-12 w-8 h-8 bg-white/90 hover:bg-white border border-zinc-200 hover:border-zinc-300 flex items-center justify-center transition-all shadow-sm hover:shadow"
+          data-testid={`cred-btn-${device.device_id}`}
+          title="View saved credentials"
+        >
+          <Key className="w-4 h-4 text-zinc-600" strokeWidth={1.5} />
         </button>
         
         {/* Refresh Screenshot Button - Bottom Right (only for online devices) */}
@@ -187,6 +200,10 @@ export default function DashboardPage() {
   const [screenshotModalOpen, setScreenshotModalOpen] = useState(false);
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
   const [showViewerBanner, setShowViewerBanner] = useState(false);
+  const [credentialModal, setCredentialModal] = useState({ open: false, deviceId: null, deviceName: '' });
+  const [credentialData, setCredentialData] = useState(null);
+  const [credentialLoading, setCredentialLoading] = useState(false);
+  const [showCredential, setShowCredential] = useState(false);
 
   // Launch Electron viewer app via rdviewer:// protocol — no browser fallback
   const handleConnect = useCallback((deviceId) => {
@@ -278,6 +295,23 @@ export default function DashboardPage() {
     setScreenshotModalOpen(false);
     setSelectedScreenshot(null);
   };
+
+  const handleCredentialClick = useCallback(async (device) => {
+    setCredentialModal({ open: true, deviceId: device.device_id, deviceName: device.device_name });
+    setCredentialData(null);
+    setShowCredential(false);
+    setCredentialLoading(true);
+    try {
+      const res = await axios.get(`${API_URL}/device-credential/${device.device_id}`);
+      setCredentialData(res.data);
+    } catch (err) {
+      if (err.response?.status === 404) {
+        setCredentialData(null);
+      }
+    } finally {
+      setCredentialLoading(false);
+    }
+  }, []);
 
   const handleRename = useCallback(async (deviceId, newName) => {
     await axios.patch(`${API_URL}/devices/${deviceId}/rename`, { device_name: newName });
@@ -392,6 +426,7 @@ export default function DashboardPage() {
                       onScreenshotClick={() => handleScreenshotClick(device)}
                       onRefreshScreenshot={() => handleRefreshScreenshot(device)}
                       onRename={handleRename}
+                      onCredentialClick={() => handleCredentialClick(device)}
                     />
                   ))}
                 </div>
@@ -415,6 +450,7 @@ export default function DashboardPage() {
                       onNotesClick={() => handleNotesClick(device)}
                       onScreenshotClick={() => handleScreenshotClick(device)}
                       onRename={handleRename}
+                      onCredentialClick={() => handleCredentialClick(device)}
                     />
                   ))}
                 </div>
@@ -423,6 +459,49 @@ export default function DashboardPage() {
           </div>
         )}
       </main>
+
+      {/* Credential Modal */}
+      {credentialModal.open && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <Key className="w-5 h-5 text-zinc-600" strokeWidth={1.5} />
+              <h2 className="font-semibold text-zinc-900">Saved Credentials</h2>
+            </div>
+            <p className="text-xs text-zinc-500 mb-4">{credentialModal.deviceName}</p>
+            {credentialLoading ? (
+              <p className="text-sm text-zinc-400">Loading...</p>
+            ) : credentialData ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-zinc-500 block mb-1">Username</label>
+                  <p className="text-sm font-mono bg-zinc-50 border border-zinc-200 rounded px-3 py-2">{credentialData.username || '—'}</p>
+                </div>
+                <div>
+                  <label className="text-xs text-zinc-500 block mb-1">Password / PIN</label>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-mono bg-zinc-50 border border-zinc-200 rounded px-3 py-2 flex-1">
+                      {showCredential ? credentialData.credential : '••••••••'}
+                    </p>
+                    <button onClick={() => setShowCredential(v => !v)} className="text-zinc-400 hover:text-zinc-700">
+                      {showCredential ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-zinc-400">Saved: {new Date(credentialData.updated_at).toLocaleString()}</p>
+              </div>
+            ) : (
+              <p className="text-sm text-zinc-400">No credentials saved for this device yet.<br/>Use the viewer agent to request credentials from the host.</p>
+            )}
+            <button
+              onClick={() => setCredentialModal({ open: false, deviceId: null, deviceName: '' })}
+              className="mt-5 w-full text-sm text-zinc-500 hover:text-zinc-700 border border-zinc-200 rounded py-2 transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Notes Modal */}
       {selectedDevice && (
