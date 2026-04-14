@@ -6,7 +6,7 @@ import { API_URL } from '../utils/webrtc';
 import NotesModal from '../components/NotesModal';
 import { Dialog, DialogContent } from '../components/ui/dialog';
 
-function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotClick, onRefreshScreenshot, onRename }) {
+function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotClick, onRefreshScreenshot, onRename, onCredentialClick }) {
   const isOnline = device.status === 'online';
   const [editing, setEditing] = useState(false);
   const [nameInput, setNameInput] = useState(device.device_name);
