@@ -291,7 +291,11 @@ async function agentCreateOffer() {
       }
 
       // Forward to main process for OS-level execution (Electron only)
-      if (IS_ELECTRON) window.electronAPI.handleControl(msg);
+      // Only forward input control events — not app-level messages
+      const INPUT_TYPES = ['mouse_move', 'mouse_click', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
+      if (IS_ELECTRON && INPUT_TYPES.includes(msg.type)) {
+        window.electronAPI.handleControl(msg);
+      }
 
       if (msg.type === 'toggle') {
         if (msg.action === 'black_screen') {
