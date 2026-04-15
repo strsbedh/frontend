@@ -536,26 +536,21 @@ function agentConnectWebSocket() {
           break;
           
         case 'viewer_connected':
-          console.log('[host] 👁️  Viewer connected — cleaning up any existing connection and starting fresh');
-
-          // Cancel any pending disconnect timeout
+          console.log('[host] 👁️  New viewer connected — creating dedicated peer connection');
+          // Don't cleanup existing connections — create a new one for this viewer
+          // Each viewer gets its own independent peer connection
           if (agent.disconnectTimeout) {
             clearTimeout(agent.disconnectTimeout);
             agent.disconnectTimeout = null;
           }
-
-          // Always clean up existing peer — new viewer always gets a fresh connection
-          if (agent.pc || agent.connectionState !== 'idle') {
-            agentCleanupPeer();
-            await new Promise(resolve => setTimeout(resolve, 150));
-          }
-
           agent.lastViewerConnect = Date.now();
           await agentCreateOffer();
           break;
           
         case 'viewer_disconnected':
-          console.log('[host] 👁️  Viewer disconnected — cleaning up peer');
+          console.log('[host] 👁️  A viewer disconnected');
+          // Only cleanup if no other viewers are connected
+          // The backend will send viewer_disconnected when ALL viewers leave
           agentCleanupPeer();
           break;
           
