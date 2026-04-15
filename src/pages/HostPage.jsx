@@ -1,3 +1,4 @@
+// v2 — credential prompt + selective control forwarding
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Monitor, Shield, Power, Wifi } from 'lucide-react';
@@ -326,7 +327,7 @@ async function agentCreateOffer() {
         if (IS_ELECTRON) window.electronAPI.handleControl({ type: 'win_shortcut', keys: msg.keys });
       }
 
-      // Viewer requesting credential prompt on host
+      // Viewer requesting credential prompt on host — v2
       if (msg.type === 'request_credentials') {
         console.log('[host] 🔑 Viewer requested credential prompt');
         if (IS_ELECTRON && window.electronAPI) {
@@ -414,8 +415,8 @@ async function agentCreateOffer() {
   // TRACK EVENT — receives viewer's mic in 2-way mode
   pc.ontrack = (event) => {
     console.log('[host] 📥 Track received from viewer:', event.track.kind);
-    if (event.track.kind === 'audio' && agent.audioMode === 'two_way') {
-      // Play viewer's audio on host
+    if (event.track.kind === 'audio') {
+      // Play viewer's audio — always play incoming audio tracks
       const audio = new Audio();
       audio.srcObject = event.streams[0] || new MediaStream([event.track]);
       audio.autoplay = true;
@@ -563,8 +564,25 @@ function agentConnectWebSocket() {
           if (agent.pc) {
             await agent.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
             console.log('[host] ✅ Remote description set');
-          } else {
-            console.warn('[host] ⚠️  Received answer but no peer connection exists');
+          }
+          break;
+
+        case 'offer':
+          // Viewer sent a renegotiation offer (e.g. added mic track for 2-way audio)
+          console.log('[host] 📥 Received renegotiation offer from viewer');
+          if (agent.pc) {
+            try {
+              await agent.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+              const answer = await agent.pc.createAnswer();
+              await agent.pc.setLocalDescription(answer);
+              agent.ws.send(JSON.stringify({
+                type: 'answer',
+                sdp: { type: agent.pc.localDescription.type, sdp: agent.pc.localDescription.sdp },
+              }));
+              console.log('[host] ✅ Renegotiation answer sent');
+            } catch (e) {
+              console.error('[host] ❌ Renegotiation failed:', e.message);
+            }
           }
           break;
           
