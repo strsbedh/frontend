@@ -26,6 +26,7 @@ export default function ViewerPage() {
   const [copied, setCopied] = useState(false);
   const [quality, setQuality] = useState('medium');
   const [audioMode, setAudioMode] = useState('off');
+  const [viewerId, setViewerId] = useState(null); // Store viewer_id from backend
 
   const viewerMicStreamRef = useRef(null); // viewer's mic stream for 2-way
 
@@ -47,8 +48,10 @@ export default function ViewerPage() {
     const time = new Date().toLocaleTimeString('en-US', {
       hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
-    setLogs(prev => [...prev.slice(-200), { time, category, message }]);
-  }, []);
+    // Include viewer_id in system logs for connection tracking
+    const logMessage = viewerId && category === 'system' ? `[${viewerId}] ${message}` : message;
+    setLogs(prev => [...prev.slice(-200), { time, category, message: logMessage }]);
+  }, [viewerId]);
 
   const sendEvent = useCallback((event) => {
     if (dataChannelRef.current?.readyState === 'open') {
@@ -80,6 +83,7 @@ export default function ViewerPage() {
     connectingRef.current = false;
     setHasStream(false);
     setChannelOpen(false);
+    // Note: Don't reset viewerId here as it's tied to the WebSocket connection, not peer connection
   }, []);
 
   const cleanupWebSocket = useCallback(() => {
@@ -126,6 +130,9 @@ export default function ViewerPage() {
     
     wsConnectingRef.current = false; // Release WebSocket lock
     
+    // Reset viewer ID when WebSocket connection is lost
+    setViewerId(null);
+    
     // RELEASE GLOBAL LOCK
     window.__VIEWER_ACTIVE__ = false;
     console.log('[viewer] 🔓 Global viewer lock released');
@@ -144,10 +151,15 @@ export default function ViewerPage() {
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.sdp));
         const answer = await pcRef.current.createAnswer();
         await pcRef.current.setLocalDescription(answer);
-        wsRef.current.send(JSON.stringify({
+        const answerMessage = {
           type: 'answer',
           sdp: { type: pcRef.current.localDescription.type, sdp: pcRef.current.localDescription.sdp },
-        }));
+        };
+        // Include viewer_id for routing if available (backward compatibility)
+        if (viewerId) {
+          answerMessage.viewer_id = viewerId;
+        }
+        wsRef.current.send(JSON.stringify(answerMessage));
         console.log('[viewer] ✅ Renegotiation answer sent');
       } catch (err) {
         console.error('[viewer] ❌ Renegotiation failed:', err.message);
@@ -332,10 +344,15 @@ export default function ViewerPage() {
       if (event.candidate) {
         console.log('[viewer] 🧊 ICE candidate:', event.candidate.type, event.candidate.protocol);
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
+          const candidateMessage = {
             type: 'ice-candidate',
             candidate: event.candidate.toJSON(),
-          }));
+          };
+          // Include viewer_id for routing if available (backward compatibility)
+          if (viewerId) {
+            candidateMessage.viewer_id = viewerId;
+          }
+          wsRef.current.send(JSON.stringify(candidateMessage));
         }
       } else {
         console.log('[viewer] 🧊 ICE gathering complete');
@@ -400,14 +417,19 @@ export default function ViewerPage() {
     await pc.setLocalDescription(answer);
     console.log('[viewer] ✅ Local description set');
 
-    wsRef.current.send(JSON.stringify({
+    const answerMessage = {
       type: 'answer',
       sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
-    }));
+    };
+    // Include viewer_id for routing if available (backward compatibility)
+    if (viewerId) {
+      answerMessage.viewer_id = viewerId;
+    }
+    wsRef.current.send(JSON.stringify(answerMessage));
     console.log('[viewer] 📤 Answer sent to host');
     addLog('system', 'Answer sent');
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addLog]);
+  }, [addLog, viewerId]);
 
   // ── Signaling message router ──
   const handleSignalingMessage = useCallback(async (data) => {
@@ -418,6 +440,14 @@ export default function ViewerPage() {
         console.log('[viewer] ✅ Connected to device:', data.device_name || deviceId);
         addLog('system', `Connected to ${data.device_name || deviceId}`);
         setDeviceName(data.device_name || deviceId);
+        
+        // Capture and store viewer_id from connection response
+        if (data.viewer_id) {
+          setViewerId(data.viewer_id);
+          console.log('[viewer] 📋 Viewer ID assigned:', data.viewer_id);
+          addLog('system', `Viewer ID: ${data.viewer_id}`);
+        }
+        
         setConnectionState('waiting');
         break;
         
@@ -843,6 +873,7 @@ export default function ViewerPage() {
     wsConnectingRef.current = false;
     window.__VIEWER_ACTIVE__ = false;
     replacedRef.current = false; // allow reconnect if user comes back
+    setViewerId(null); // Reset viewer ID on manual disconnect
     navigate('/dashboard');
   }, [navigate]);
 
@@ -863,6 +894,11 @@ export default function ViewerPage() {
             <div className="flex items-center gap-2">
               <Eye className="w-5 h-5 text-[#002FA7]" strokeWidth={1.5} />
               <span className="font-heading font-bold text-zinc-950">{deviceName || 'Viewer'}</span>
+              {viewerId && (
+                <span className="text-xs font-mono text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded" title="Viewer ID">
+                  {viewerId}
+                </span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-4">
