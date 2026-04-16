@@ -659,12 +659,15 @@ export default function ViewerPage() {
 
   const handleKeyDown = useCallback(async (e) => {
     if (!controlActive) return;
+    
+    // CRITICAL: Prevent ALL default browser behavior when control is active
     e.preventDefault();
     e.stopPropagation();
+    e.stopImmediatePropagation();
 
     // Remap Alt+[key] → Win+[key] on host when control is active
     // (Win key can't be captured by browser — Alt combos are the best proxy)
-    if (e.altKey && !e.ctrlKey && !e.shiftKey) {
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
       const winMap = {
         'r': 'win+r',   // Alt+R → Win+R (Run)
         'd': 'win+d',   // Alt+D → Win+D (Desktop)
@@ -680,7 +683,20 @@ export default function ViewerPage() {
       if (mapped && dataChannelRef.current?.readyState === 'open') {
         dataChannelRef.current.send(JSON.stringify({ type: 'win_shortcut', keys: mapped }));
         addLog('sent', `Alt+${e.key.toUpperCase()} → ${mapped}`);
-        return;
+        return; // Don't send as regular key event
+      }
+    }
+
+    // CRITICAL: Also handle Win+R directly if browser somehow captures it
+    // This is a fallback - browsers usually can't capture Win key
+    if (e.metaKey || e.key === 'Meta') {
+      // Try to handle Win key combinations
+      if (e.key === 'r' && e.metaKey) {
+        if (dataChannelRef.current?.readyState === 'open') {
+          dataChannelRef.current.send(JSON.stringify({ type: 'win_shortcut', keys: 'win+r' }));
+          addLog('sent', 'Win+R');
+          return;
+        }
       }
     }
 
@@ -714,8 +730,12 @@ export default function ViewerPage() {
 
   const handleKeyUp = useCallback((e) => {
     if (!controlActive) return;
+    
+    // CRITICAL: Prevent ALL default browser behavior when control is active
     e.preventDefault();
     e.stopPropagation();
+    e.stopImmediatePropagation();
+    
     sendEvent({ type: 'key_up', key: e.key, code: e.code });
   }, [controlActive, sendEvent]);
 
@@ -766,13 +786,49 @@ export default function ViewerPage() {
   // This intercepts Ctrl+V, Win+R, Alt+Tab etc. BEFORE the browser handles them
   useEffect(() => {
     if (!controlActive) return;
-    document.addEventListener('keydown', handleKeyDown, { capture: true });
-    document.addEventListener('keyup',   handleKeyUp,   { capture: true });
+    
+    // SUPER AGGRESSIVE: Add a global keydown listener that runs even before our main handler
+    const globalKeyHandler = (e) => {
+      if (!controlActive) return;
+      
+      // Specifically target Win+R and other problematic combinations
+      if (e.metaKey && e.key === 'r') {
+        console.log('[viewer] 🚫 BLOCKING Win+R from browser');
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        if (dataChannelRef.current?.readyState === 'open') {
+          dataChannelRef.current.send(JSON.stringify({ type: 'win_shortcut', keys: 'win+r' }));
+          addLog('sent', 'Win+R (intercepted)');
+        }
+        return false;
+      }
+      
+      // Also block Alt+R to prevent browser handling
+      if (e.altKey && e.key === 'r' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        console.log('[viewer] 🚫 BLOCKING Alt+R from browser');
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+    
+    // Add multiple layers of event interception
+    document.addEventListener('keydown', globalKeyHandler, { capture: true, passive: false });
+    window.addEventListener('keydown', globalKeyHandler, { capture: true, passive: false });
+    
+    document.addEventListener('keydown', handleKeyDown, { capture: true, passive: false });
+    document.addEventListener('keyup',   handleKeyUp,   { capture: true, passive: false });
+    
     return () => {
+      document.removeEventListener('keydown', globalKeyHandler, { capture: true });
+      window.removeEventListener('keydown', globalKeyHandler, { capture: true });
       document.removeEventListener('keydown', handleKeyDown, { capture: true });
       document.removeEventListener('keyup',   handleKeyUp,   { capture: true });
     };
-  }, [controlActive, handleKeyDown, handleKeyUp]);
+  }, [controlActive, handleKeyDown, handleKeyUp, addLog]);
 
   // Send quality request to host when changed
   useEffect(() => {
@@ -824,8 +880,43 @@ export default function ViewerPage() {
     console.log('[viewer] 🚀 Component mounted - initializing connection');
     connectSignaling();
     
+    // AGGRESSIVE: Add global event prevention when control is active
+    const preventAllShortcuts = (e) => {
+      if (!controlActive) return;
+      
+      // Block common problematic shortcuts
+      if (
+        (e.metaKey && e.key === 'r') ||  // Win+R
+        (e.altKey && e.key === 'r') ||   // Alt+R  
+        (e.altKey && e.key === 'F4') ||  // Alt+F4
+        (e.altKey && e.key === 'Tab') || // Alt+Tab
+        (e.ctrlKey && e.key === 'w') ||  // Ctrl+W
+        (e.ctrlKey && e.key === 't') ||  // Ctrl+T
+        (e.ctrlKey && e.key === 'n') ||  // Ctrl+N
+        (e.ctrlKey && e.key === 'r') ||  // Ctrl+R
+        (e.key === 'F5') ||              // F5
+        (e.key === 'F11') ||             // F11
+        (e.key === 'F12')                // F12
+      ) {
+        console.log('[viewer] 🚫 BLOCKING shortcut:', e.key, 'meta:', e.metaKey, 'alt:', e.altKey, 'ctrl:', e.ctrlKey);
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+    
+    // Add to multiple event targets
+    document.addEventListener('keydown', preventAllShortcuts, { capture: true, passive: false });
+    window.addEventListener('keydown', preventAllShortcuts, { capture: true, passive: false });
+    
     return () => {
       console.log('[viewer] 🛑 Component unmounting - cleaning up');
+      
+      // Remove global event listeners
+      document.removeEventListener('keydown', preventAllShortcuts, { capture: true });
+      window.removeEventListener('keydown', preventAllShortcuts, { capture: true });
+      
       // Cleanup on unmount
       if (wsHeartbeatIntervalRef.current) {
         clearInterval(wsHeartbeatIntervalRef.current);
@@ -1034,7 +1125,12 @@ export default function ViewerPage() {
                   <span className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-500">Win Shortcuts</span>
                 </div>
                 <div className="px-5 py-2 bg-zinc-50">
-                  <p className="text-xs text-zinc-400">Tip: <span className="font-mono text-zinc-500">Alt+R</span> → Win+R on host (when Take Control is ON)</p>
+                  <p className="text-xs text-zinc-400">
+                    <strong>Tip:</strong> Press <span className="font-mono text-zinc-600 bg-white px-1 rounded">Alt+R</span> to send Win+R to host (when Take Control is ON)
+                  </p>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Browser cannot capture Win key directly, so use Alt+key combinations instead.
+                  </p>
                 </div>
                 <div className="p-3 grid grid-cols-2 gap-1.5">
                   {[
