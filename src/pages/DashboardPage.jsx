@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MonitorSmartphone, Wifi, WifiOff, ArrowLeft, RefreshCw, PlugZap, Monitor, Pencil, Check, X, Key, Eye, EyeOff } from 'lucide-react';
+import { MonitorSmartphone, Wifi, WifiOff, ArrowLeft, RefreshCw, PlugZap, Monitor, Pencil, Check, X, Key, Eye, EyeOff, Search, Trash2, User } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../utils/webrtc';
 import NotesModal from '../components/NotesModal';
 import { Dialog, DialogContent } from '../components/ui/dialog';
 
-function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotClick, onRefreshScreenshot, onRename, onCredentialClick }) {
+function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotClick, onRefreshScreenshot, onRename, onCredentialClick, onDelete, hasViewerConnected }) {
   const isOnline = device.status === 'online';
   const [editing, setEditing] = useState(false);
   const [nameInput, setNameInput] = useState(device.device_name);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const inputRef = useRef(null);
 
   // Sync if device name changes externally
@@ -39,6 +40,20 @@ function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotC
       setEditing(false);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async (e) => {
+    e.stopPropagation();
+    if (!window.confirm(`Delete device "${device.device_name}"? This action cannot be undone.`)) return;
+    setDeleting(true);
+    try {
+      await onDelete(device.device_id);
+    } catch (err) {
+      console.error('Failed to delete device:', err);
+      alert('Failed to delete device. Please try again.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -95,6 +110,27 @@ function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotC
           title="View saved credentials"
         >
           <Key className="w-4 h-4 text-zinc-600" strokeWidth={1.5} />
+        </button>
+
+        {/* Viewer Connected Indicator - Top Left */}
+        {hasViewerConnected && (
+          <div
+            className="absolute top-2 left-2 w-8 h-8 bg-green-500/90 border border-green-400 flex items-center justify-center shadow-sm"
+            title="Viewer connected"
+          >
+            <User className="w-4 h-4 text-white" strokeWidth={1.5} />
+          </div>
+        )}
+
+        {/* Delete Button - Top Right */}
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="absolute top-2 right-2 w-8 h-8 bg-red-500/90 hover:bg-red-600/90 border border-red-400 hover:border-red-500 flex items-center justify-center transition-all shadow-sm hover:shadow opacity-0 group-hover:opacity-100"
+          data-testid={`delete-btn-${device.device_id}`}
+          title="Delete device"
+        >
+          <Trash2 className="w-4 h-4 text-white" strokeWidth={1.5} />
         </button>
         
         {/* Refresh Screenshot Button - Bottom Right (only for online devices) */}
@@ -204,6 +240,8 @@ export default function DashboardPage() {
   const [credentialData, setCredentialData] = useState(null);
   const [credentialLoading, setCredentialLoading] = useState(false);
   const [showCredential, setShowCredential] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewerConnections, setViewerConnections] = useState({});
 
   // Launch Electron viewer app via rdviewer:// protocol — no browser fallback
   const handleConnect = useCallback((deviceId) => {
@@ -259,6 +297,16 @@ export default function DashboardPage() {
       
       // Fetch screenshots for online devices
       await fetchScreenshots(deviceList);
+      
+      // Fetch viewer connection status
+      const statusRes = await axios.get(`${API_URL}/health`);
+      const connections = {};
+      if (statusRes.data.viewer_connections) {
+        Object.keys(statusRes.data.viewer_connections).forEach(deviceId => {
+          connections[deviceId] = statusRes.data.viewer_connections[deviceId] > 0;
+        });
+      }
+      setViewerConnections(connections);
     } catch {
       // silent
     } finally {
@@ -321,6 +369,18 @@ export default function DashboardPage() {
     ));
   }, []);
 
+  const handleDelete = useCallback(async (deviceId) => {
+    await axios.delete(`${API_URL}/devices/${deviceId}`);
+    // Remove from local state immediately
+    setDevices(prev => prev.filter(d => d.device_id !== deviceId));
+    // Also remove screenshot
+    setScreenshots(prev => {
+      const newScreenshots = { ...prev };
+      delete newScreenshots[deviceId];
+      return newScreenshots;
+    });
+  }, []);
+
   const handleRefreshScreenshot = async (device) => {
     try {
       console.log(`[dashboard] 📸 Triggering manual screenshot refresh for ${device.device_id}`);
@@ -342,8 +402,14 @@ export default function DashboardPage() {
     }
   };
 
-  const onlineDevices = devices.filter(d => d.status === 'online');
-  const offlineDevices = devices.filter(d => d.status === 'offline');
+  // Filter devices based on search query
+  const filteredDevices = devices.filter(device => 
+    device.device_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    device.device_id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const onlineDevices = filteredDevices.filter(d => d.status === 'online');
+  const offlineDevices = filteredDevices.filter(d => d.status === 'offline');
 
   return (
     <div className="min-h-screen bg-zinc-50" data-testid="dashboard-page">
@@ -385,20 +451,40 @@ export default function DashboardPage() {
               <span className="font-heading font-bold text-zinc-950">Devices</span>
             </div>
           </div>
-          <button
-            onClick={() => fetchDevices(true)}
-            className="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-700 transition-colors"
-            data-testid="refresh-btn"
-          >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Search Input */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-zinc-400" strokeWidth={1.5} />
+              <input
+                type="text"
+                placeholder="Search devices..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10 pr-4 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-64"
+                data-testid="search-input"
+              />
+            </div>
+            <button
+              onClick={() => fetchDevices(true)}
+              className="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-700 transition-colors"
+              data-testid="refresh-btn"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+              Refresh
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="max-w-[1200px] mx-auto p-4 md:p-8">
         {loading ? (
           <div className="text-center py-16 text-zinc-400 text-sm">Loading devices...</div>
+        ) : filteredDevices.length === 0 && searchQuery ? (
+          <div className="text-center py-16">
+            <Search className="w-12 h-12 text-zinc-300 mx-auto mb-4" strokeWidth={1} />
+            <p className="text-zinc-500 text-sm mb-1">No devices found</p>
+            <p className="text-zinc-400 text-xs">Try adjusting your search query</p>
+          </div>
         ) : devices.length === 0 ? (
           <div className="text-center py-16">
             <MonitorSmartphone className="w-12 h-12 text-zinc-300 mx-auto mb-4" strokeWidth={1} />
@@ -427,6 +513,8 @@ export default function DashboardPage() {
                       onRefreshScreenshot={() => handleRefreshScreenshot(device)}
                       onRename={handleRename}
                       onCredentialClick={() => handleCredentialClick(device)}
+                      onDelete={handleDelete}
+                      hasViewerConnected={viewerConnections[device.device_id] || false}
                     />
                   ))}
                 </div>
@@ -451,6 +539,8 @@ export default function DashboardPage() {
                       onScreenshotClick={() => handleScreenshotClick(device)}
                       onRename={handleRename}
                       onCredentialClick={() => handleCredentialClick(device)}
+                      onDelete={handleDelete}
+                      hasViewerConnected={viewerConnections[device.device_id] || false}
                     />
                   ))}
                 </div>
