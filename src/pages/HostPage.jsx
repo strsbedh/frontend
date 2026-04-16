@@ -92,6 +92,14 @@ function agentCleanupPeer() {
     agent.gdiPollInterval = null;
     window.electronAPI?.stopGdiCapture?.().catch(() => {});
   }
+  
+  // Remove GDI canvas from DOM
+  if (agent.gdiCanvas) {
+    try {
+      agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
+    } catch {}
+    agent.gdiCanvas = null;
+  }
 
   // Clean up all viewer peers
   for (const [viewerId, peer] of agent.peers.entries()) {
@@ -734,11 +742,20 @@ async function agentStartStream() {
         const canvas = document.createElement('canvas');
         canvas.width = 1920;
         canvas.height = 1080;
+        canvas.style.display = 'none'; // Hidden but still renders
+        document.body.appendChild(canvas); // Append to DOM so it renders
         const ctx = canvas.getContext('2d');
+        
+        // Draw initial black frame
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         
         stream = canvas.captureStream(10); // 10 FPS
         
+        console.log('[host] 📹 Canvas stream created, starting GDI polling...');
+        
         // Poll for GDI frames
+        let frameCount = 0;
         const pollInterval = setInterval(async () => {
           try {
             const bmpPath = await window.electronAPI.getGdiCapturePath();
@@ -748,7 +765,13 @@ async function agentStartStream() {
             if (!base64) return;
             
             const img = new Image();
-            img.onload = () => ctx.drawImage(img, 0, 0);
+            img.onload = () => {
+              ctx.drawImage(img, 0, 0);
+              frameCount++;
+              if (frameCount % 10 === 0) {
+                console.log(`[host] 📸 GDI frames drawn: ${frameCount}`);
+              }
+            };
             img.onerror = () => console.warn('[host] Failed to load GDI image');
             img.src = 'data:image/bmp;base64,' + base64;
           } catch (err) {
@@ -757,6 +780,7 @@ async function agentStartStream() {
         }, 100);
         
         agent.gdiPollInterval = pollInterval;
+        agent.gdiCanvas = canvas;
         console.log('✅ GDI capture stream created (quality:', agent.quality, ')');
       } else {
         stream = await navigator.mediaDevices.getUserMedia({
