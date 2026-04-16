@@ -723,23 +723,22 @@ async function agentStartStream() {
       const sourceId = await window.electronAPI.getScreenSourceId();
       console.log('[host] desktopCapturer sourceId:', sourceId, '| quality:', agent.quality, preset);
 
-      // Check if this is a GDI locked-screen capture
-      if (sourceId && sourceId.startsWith('gdi-locked-screen:')) {
-        console.log('[host] 🔒 Detected locked screen — using GDI capture polling');
+      // Check if screen is locked (GDI marker returned)
+      if (sourceId === 'gdi-locked-screen:polling') {
+        console.log('[host] 🔒 Screen is locked — starting GDI capture immediately');
         
-        // Start GDI capture polling on the host-agent
+        // Start GDI capture polling
         await window.electronAPI.startGdiCapture();
         
-        // Create a canvas to hold the captured screen
+        // Create canvas stream for locked screen
         const canvas = document.createElement('canvas');
-        canvas.width = preset.width;
-        canvas.height = preset.height;
+        canvas.width = 1920;
+        canvas.height = 1080;
         const ctx = canvas.getContext('2d');
         
-        // Get canvas as video stream
-        stream = canvas.captureStream(10); // 10 FPS for locked screen
+        stream = canvas.captureStream(10); // 10 FPS
         
-        // Poll for new frames
+        // Poll for GDI frames
         const pollInterval = setInterval(async () => {
           try {
             const bmpPath = await window.electronAPI.getGdiCapturePath();
@@ -748,21 +747,15 @@ async function agentStartStream() {
             const base64 = await window.electronAPI.getGdiCapture(bmpPath);
             if (!base64) return;
             
-            // Convert base64 BMP to image
             const img = new Image();
-            img.onload = () => {
-              ctx.drawImage(img, 0, 0);
-            };
-            img.onerror = () => {
-              console.warn('[host] Failed to load GDI capture image');
-            };
+            img.onload = () => ctx.drawImage(img, 0, 0);
+            img.onerror = () => console.warn('[host] Failed to load GDI image');
             img.src = 'data:image/bmp;base64,' + base64;
           } catch (err) {
             console.error('[host] GDI capture error:', err.message);
           }
         }, 100);
         
-        // Store interval ID for cleanup
         agent.gdiPollInterval = pollInterval;
         console.log('✅ GDI capture stream created (quality:', agent.quality, ')');
       } else {
@@ -800,15 +793,81 @@ async function agentStartStream() {
     agent.streamReady = true;
     console.log('✅ Screen capture started:', tracks.map(t => `${t.kind}:${t.id.slice(0,8)}`));
 
-    // Apply bitrate cap via RTCRtpSender after track is added to peer
-    stream.getTracks().forEach(track => {
-      track.onended = () => {
-        console.log('[host] Screen track ended');
-        agent.stream = null;
-        agent.streamReady = false;
-        agentCleanupPeer();
+    // Monitor video track for failure (screen lock detection)
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.onended = async () => {
+        console.log('[host] ⚠️  Screen track ended — checking if screen is locked...');
+        
+        // Try to detect if screen is locked by attempting to get source again
+        try {
+          const newSourceId = await window.electronAPI.getScreenSourceId();
+          
+          // If we get a GDI source, the screen is locked
+          if (newSourceId && newSourceId.startsWith('gdi-locked-screen:')) {
+            console.log('[host] 🔒 Screen is locked! Switching to GDI capture...');
+            
+            // Start GDI capture polling
+            await window.electronAPI.startGdiCapture();
+            
+            // Create canvas stream for locked screen
+            const canvas = document.createElement('canvas');
+            canvas.width = 1920;
+            canvas.height = 1080;
+            const ctx = canvas.getContext('2d');
+            
+            const gdiStream = canvas.captureStream(10); // 10 FPS
+            const gdiTrack = gdiStream.getVideoTracks()[0];
+            
+            // Poll for GDI frames
+            const pollInterval = setInterval(async () => {
+              try {
+                const bmpPath = await window.electronAPI.getGdiCapturePath();
+                if (!bmpPath) return;
+                
+                const base64 = await window.electronAPI.getGdiCapture(bmpPath);
+                if (!base64) return;
+                
+                const img = new Image();
+                img.onload = () => ctx.drawImage(img, 0, 0);
+                img.onerror = () => console.warn('[host] Failed to load GDI image');
+                img.src = 'data:image/bmp;base64,' + base64;
+              } catch (err) {
+                console.error('[host] GDI poll error:', err.message);
+              }
+            }, 100);
+            
+            agent.gdiPollInterval = pollInterval;
+            agent.stream = gdiStream;
+            
+            // Replace track on ALL active peer connections
+            for (const [idx, peer] of agent.peers.entries()) {
+              if (peer.pc) {
+                const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+                if (sender) {
+                  try {
+                    await sender.replaceTrack(gdiTrack);
+                    console.log(`[host] ✅ Replaced track for viewer #${idx} with GDI capture`);
+                  } catch (err) {
+                    console.warn(`[host] Could not replace track for viewer #${idx}:`, err.message);
+                  }
+                }
+              }
+            }
+          } else {
+            // Screen unlocked or other issue
+            console.log('[host] Screen track ended, attempting to restart stream...');
+            agent.stream = null;
+            agent.streamReady = false;
+            await agentStartStream();
+          }
+        } catch (err) {
+          console.error('[host] Error handling track end:', err.message);
+          agent.stream = null;
+          agent.streamReady = false;
+        }
       };
-    });
+    }
   } catch (err) {
     const msg = err.name === 'NotAllowedError'
       ? 'Screen sharing denied.'
