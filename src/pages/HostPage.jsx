@@ -86,6 +86,13 @@ function shouldIgnoreDisconnect() {
 function agentCleanupPeer() {
   console.log('[host] 🧹 Cleaning up ALL peer connections');
 
+  // Clean up GDI capture polling if active
+  if (agent.gdiPollInterval) {
+    clearInterval(agent.gdiPollInterval);
+    agent.gdiPollInterval = null;
+    window.electronAPI?.stopGdiCapture?.().catch(() => {});
+  }
+
   // Clean up all viewer peers
   for (const [viewerId, peer] of agent.peers.entries()) {
     agentCleanupViewerPeer(viewerId);
@@ -716,20 +723,64 @@ async function agentStartStream() {
       const sourceId = await window.electronAPI.getScreenSourceId();
       console.log('[host] desktopCapturer sourceId:', sourceId, '| quality:', agent.quality, preset);
 
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          mandatory: {
-            chromeMediaSource: 'desktop',
-            chromeMediaSourceId: sourceId,
-            maxWidth:     preset.width,
-            maxHeight:    preset.height,
-            minFrameRate: Math.max(1, preset.frameRate - 2),
-            maxFrameRate: preset.frameRate,
+      // Check if this is a GDI locked-screen capture
+      if (sourceId && sourceId.startsWith('gdi-locked-screen:')) {
+        console.log('[host] 🔒 Detected locked screen — using GDI capture polling');
+        
+        // Start GDI capture polling on the host-agent
+        await window.electronAPI.startGdiCapture();
+        
+        // Create a canvas to hold the captured screen
+        const canvas = document.createElement('canvas');
+        canvas.width = preset.width;
+        canvas.height = preset.height;
+        const ctx = canvas.getContext('2d');
+        
+        // Get canvas as video stream
+        stream = canvas.captureStream(10); // 10 FPS for locked screen
+        
+        // Poll for new frames
+        const pollInterval = setInterval(async () => {
+          try {
+            const bmpPath = await window.electronAPI.getGdiCapturePath();
+            if (!bmpPath) return;
+            
+            const base64 = await window.electronAPI.getGdiCapture(bmpPath);
+            if (!base64) return;
+            
+            // Convert base64 BMP to image
+            const img = new Image();
+            img.onload = () => {
+              ctx.drawImage(img, 0, 0);
+            };
+            img.onerror = () => {
+              console.warn('[host] Failed to load GDI capture image');
+            };
+            img.src = 'data:image/bmp;base64,' + base64;
+          } catch (err) {
+            console.error('[host] GDI capture error:', err.message);
+          }
+        }, 100);
+        
+        // Store interval ID for cleanup
+        agent.gdiPollInterval = pollInterval;
+        console.log('✅ GDI capture stream created (quality:', agent.quality, ')');
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: sourceId,
+              maxWidth:     preset.width,
+              maxHeight:    preset.height,
+              minFrameRate: Math.max(1, preset.frameRate - 2),
+              maxFrameRate: preset.frameRate,
+            },
           },
-        },
-      });
-      console.log('✅ getUserMedia succeeded (quality:', agent.quality, ')');
+        });
+        console.log('✅ getUserMedia succeeded (quality:', agent.quality, ')');
+      }
     } else {
       stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
