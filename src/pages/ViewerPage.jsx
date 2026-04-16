@@ -583,9 +583,24 @@ export default function ViewerPage() {
   const getCoords = useCallback((e) => {
     const el = containerRef.current;
     if (!el) return null;
+    
+    // Simple coordinate calculation relative to the container that receives events
     const r = el.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width;
     const y = (e.clientY - r.top) / r.height;
+    
+    console.log('[DEBUG] Fixed frontend coordinate calculation:', {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      rectLeft: r.left,
+      rectTop: r.top,
+      rectWidth: r.width,
+      rectHeight: r.height,
+      finalX: x,
+      finalY: y,
+      element: 'containerRef'
+    });
+    
     return (x >= 0 && x <= 1 && y >= 0 && y <= 1) ? { x, y } : null;
   }, []);
 
