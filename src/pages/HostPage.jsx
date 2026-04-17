@@ -797,6 +797,7 @@ async function agentSetAudioMode(mode) {
     for (const [, peer] of agent.peers.entries()) {
       if (peer.viewerAudioEl) {
         peer.viewerAudioEl.muted = true;
+        console.log(`[host] 🔊 Muted viewer audio element`);
       }
       if (peer.pc) {
         peer.pc.getReceivers().forEach(r => {
@@ -807,10 +808,17 @@ async function agentSetAudioMode(mode) {
   } else {
     await agentStartMic();
     _setMicActive(true);
-    // Unmute incoming viewer audio elements
+    // Unmute incoming viewer audio elements AND restart playback
     for (const [, peer] of agent.peers.entries()) {
       if (peer.viewerAudioEl) {
         peer.viewerAudioEl.muted = false;
+        console.log(`[host] 🔊 Unmuted viewer audio element, restarting playback...`);
+        // CRITICAL: Restart playback after unmuting
+        peer.viewerAudioEl.play().then(() => {
+          console.log(`[host] 🔊 ✅ Viewer audio playback restarted successfully`);
+        }).catch((err) => {
+          console.error(`[host] 🔊 ❌ Failed to restart viewer audio playback:`, err.message);
+        });
       }
       if (peer.pc) {
         peer.pc.getReceivers().forEach(r => {
