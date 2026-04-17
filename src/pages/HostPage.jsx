@@ -233,15 +233,16 @@ async function agentCreateOffer(viewerId) {
   });
 
   // Add audio transceivers upfront — NO renegotiation ever needed after this
-  // sendonly: host mic → viewer  |  recvonly: viewer mic → host
+  // CRITICAL: Use sendrecv for BOTH transceivers to allow bidirectional audio
+  // The viewer will be able to send audio on the second transceiver
   console.log(`[host] 🎤 ═══ CREATING AUDIO TRANSCEIVERS FOR VIEWER ${viewerId} ═══`);
-  const hostMicTransceiver = pc.addTransceiver('audio', { direction: 'sendonly' });
+  const hostMicTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
   console.log(`[host] 🎤 Created hostMicTransceiver (host→viewer):`);
   console.log(`[host] 🎤   - direction: ${hostMicTransceiver.direction}`);
   console.log(`[host] 🎤   - currentDirection: ${hostMicTransceiver.currentDirection}`);
   console.log(`[host] 🎤   - mid: ${hostMicTransceiver.mid}`);
   
-  const viewerMicTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+  const viewerMicTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
   console.log(`[host] 🎤 Created viewerMicTransceiver (viewer→host):`);
   console.log(`[host] 🎤   - direction: ${viewerMicTransceiver.direction}`);
   console.log(`[host] 🎤   - currentDirection: ${viewerMicTransceiver.currentDirection}`);
