@@ -129,11 +129,16 @@ function agentCleanupViewerPeer(viewerId) {
 
   if (peer.dcKeepalive) { clearInterval(peer.dcKeepalive); peer.dcKeepalive = null; }
   if (peer.disconnectTimeout) { clearTimeout(peer.disconnectTimeout); peer.disconnectTimeout = null; }
+  if (peer.audioStatsInterval) { clearInterval(peer.audioStatsInterval); peer.audioStatsInterval = null; }
 
   // Stop viewer audio playback
   if (peer.viewerAudioEl) {
     peer.viewerAudioEl.pause();
     peer.viewerAudioEl.srcObject = null;
+    // Remove audio element from DOM
+    if (peer.viewerAudioEl.parentNode) {
+      peer.viewerAudioEl.parentNode.removeChild(peer.viewerAudioEl);
+    }
     peer.viewerAudioEl = null;
   }
 
@@ -485,6 +490,30 @@ async function agentCreateOffer(viewerId) {
       audio.onplay = () => console.log(`[host] 🔊 📢 Audio element PLAYING`);
       audio.onpause = () => console.log(`[host] 🔊 ⏸️  Audio element PAUSED`);
       audio.onvolumechange = () => console.log(`[host] 🔊 🔊 Volume changed: ${audio.volume}, muted: ${audio.muted}`);
+      
+      // CRITICAL DIAGNOSTIC: Log WebRTC stats to verify audio bytes are flowing
+      const statsInterval = setInterval(() => {
+        if (!peerState.viewerMicTransceiver || !peerState.pc) {
+          clearInterval(statsInterval);
+          return;
+        }
+        peerState.viewerMicTransceiver.receiver.getStats().then(stats => {
+          stats.forEach(report => {
+            if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+              console.log(`[host] 📊 Audio RTP stats:`, {
+                bytesReceived: report.bytesReceived,
+                packetsReceived: report.packetsReceived,
+                packetsLost: report.packetsLost,
+                jitter: report.jitter,
+                audioLevel: report.audioLevel
+              });
+            }
+          });
+        }).catch(() => {});
+      }, 3000);
+      
+      // Store interval reference for cleanup
+      peerState.audioStatsInterval = statsInterval;
       
       console.log(`[host] 🔊 ═══ AUDIO SETUP COMPLETE ═══`);
     }
