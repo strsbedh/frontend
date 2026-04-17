@@ -460,12 +460,13 @@ async function agentCreateOffer(viewerId) {
       // When track becomes active (viewer enables mic), ensure audio plays
       event.track.onunmute = () => {
         console.log(`[host] 🔊 🎤 Viewer ${viewerId} mic track UNMUTED — ensuring playback`);
-        if (peerState.viewerAudioEl && agent.audioMode !== 'off') {
-          peerState.viewerAudioEl.muted = false;
+        if (peerState.viewerAudioEl) {
+          // CRITICAL: Always restart playback when track unmutes, regardless of audio mode
+          // The audio element's muted property will control whether we hear it
           peerState.viewerAudioEl.play().then(() => {
-            console.log(`[host] 🔊 ✅ Audio playback resumed after unmute`);
+            console.log(`[host] 🔊 ✅ Audio playback resumed after track unmute`);
           }).catch((err) => {
-            console.error(`[host] 🔊 ❌ Audio playback failed after unmute:`, err.message);
+            console.error(`[host] 🔊 ❌ Audio playback failed after track unmute:`, err.message);
           });
         }
       };
