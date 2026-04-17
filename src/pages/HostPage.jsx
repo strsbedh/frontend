@@ -130,6 +130,13 @@ function agentCleanupViewerPeer(viewerId) {
   if (peer.dcKeepalive) { clearInterval(peer.dcKeepalive); peer.dcKeepalive = null; }
   if (peer.disconnectTimeout) { clearTimeout(peer.disconnectTimeout); peer.disconnectTimeout = null; }
 
+  // Stop viewer audio playback
+  if (peer.viewerAudioEl) {
+    peer.viewerAudioEl.pause();
+    peer.viewerAudioEl.srcObject = null;
+    peer.viewerAudioEl = null;
+  }
+
   if (peer.dc) {
     peer.dc.onopen = null;
     peer.dc.onclose = null;
@@ -367,11 +374,19 @@ async function agentCreateOffer(viewerId) {
   // TRACK EVENT — receives viewer's mic in 2-way mode
   pc.ontrack = (event) => {
     if (event.track.kind === 'audio') {
+      // Store reference on peerState so we can mute it when audio mode changes
+      if (peerState.viewerAudioEl) {
+        peerState.viewerAudioEl.pause();
+        peerState.viewerAudioEl.srcObject = null;
+      }
       const audio = new Audio();
       audio.srcObject = event.streams[0] || new MediaStream([event.track]);
       audio.autoplay = true;
+      // Start muted if audio mode is off
+      audio.muted = (agent.audioMode === 'off');
       audio.play().catch(() => {});
-      console.log(`[host] 🔊 Playing viewer ${viewerId} audio`);
+      peerState.viewerAudioEl = audio;
+      console.log(`[host] 🔊 Playing viewer ${viewerId} audio (muted: ${audio.muted})`);
     }
   };
 
@@ -698,26 +713,28 @@ async function agentSetAudioMode(mode) {
   if (mode === 'off') {
     agentStopMic();
     _setMicActive(false);
-    // Also disable any incoming viewer audio tracks on all peers
+    // Mute incoming viewer audio elements
     for (const [, peer] of agent.peers.entries()) {
+      if (peer.viewerAudioEl) {
+        peer.viewerAudioEl.muted = true;
+      }
       if (peer.pc) {
         peer.pc.getReceivers().forEach(r => {
-          if (r.track?.kind === 'audio') {
-            r.track.enabled = false;
-          }
+          if (r.track?.kind === 'audio') r.track.enabled = false;
         });
       }
     }
   } else {
     await agentStartMic();
     _setMicActive(true);
-    // Re-enable incoming viewer audio tracks
+    // Unmute incoming viewer audio elements
     for (const [, peer] of agent.peers.entries()) {
+      if (peer.viewerAudioEl) {
+        peer.viewerAudioEl.muted = false;
+      }
       if (peer.pc) {
         peer.pc.getReceivers().forEach(r => {
-          if (r.track?.kind === 'audio') {
-            r.track.enabled = true;
-          }
+          if (r.track?.kind === 'audio') r.track.enabled = true;
         });
       }
     }
