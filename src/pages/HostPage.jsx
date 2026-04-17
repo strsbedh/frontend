@@ -345,6 +345,17 @@ async function agentCreateOffer(viewerId) {
           });
         }
       }
+
+      // File transfer messages — forward to Electron main process for saving to disk
+      if (msg.type === 'file_start' || msg.type === 'file_chunk' || msg.type === 'file_end') {
+        if (IS_ELECTRON && window.electronAPI) {
+          console.log(`[host] 📁 Forwarding ${msg.type} to Electron main process:`, msg.name || '');
+          window.electronAPI.handleControl(msg);
+        } else {
+          console.warn(`[host] ⚠️  File transfer not supported in browser mode`);
+        }
+        return;
+      }
     } catch (err) {
       console.error('[host] ❌ Error parsing DC message:', err);
     }
