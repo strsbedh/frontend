@@ -232,10 +232,18 @@ async function agentCreateOffer(viewerId) {
     console.log(`[host] ✅ Track added to viewer ${viewerId}: ${track.kind}`);
   });
 
-  // Add a recvonly audio transceiver so we can receive viewer's mic in 2-way mode
-  // This avoids needing renegotiation when viewer enables their mic
-  pc.addTransceiver('audio', { direction: 'recvonly' });
-  console.log(`[host] ✅ Audio recvonly transceiver added for viewer ${viewerId}`);
+  // Add audio transceivers upfront — NO renegotiation ever needed after this
+  // sendonly: host mic → viewer  |  recvonly: viewer mic → host
+  const hostMicTransceiver = pc.addTransceiver('audio', { direction: 'sendonly' });
+  const viewerMicTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+  peerState.hostMicTransceiver = hostMicTransceiver;
+  peerState.viewerMicTransceiver = viewerMicTransceiver;
+  // If mic already active, attach it now
+  if (agent.micStream) {
+    const micTrack = agent.micStream.getAudioTracks()[0];
+    if (micTrack) hostMicTransceiver.sender.replaceTrack(micTrack).catch(() => {});
+  }
+  console.log(`[host] ✅ Audio transceivers added for viewer ${viewerId}`);
 
   // CREATE DATA CHANNEL (HOST SIDE ONLY)
   const dc = pc.createDataChannel('control', { ordered: true });
@@ -670,40 +678,24 @@ function agentConnectWebSocket() {
 agent.audioMode = 'off';
 agent.micStream = null; // host microphone stream
 
-// Start host microphone capture
+// Start host microphone — uses replaceTrack, NO renegotiation
 async function agentStartMic() {
   if (agent.micStream) return; // already running
   try {
     agent.micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     console.log('[host] 🎤 Microphone started');
 
-    if (agent.peers.size > 0 && agent.micStream) {
-      const micTrack = agent.micStream.getAudioTracks()[0];
-      if (micTrack) {
-        for (const [idx, peer] of agent.peers.entries()) {
-          if (peer.pc) {
-            try {
-              peer.pc.addTransceiver(micTrack, { direction: 'sendonly', streams: [agent.micStream] });
-              console.log(`[host] ✅ Mic transceiver added to viewer #${idx}`);
-            } catch (err) {
-              console.warn(`[host] Could not add mic to viewer #${idx}:`, err.message);
-            }
+    const micTrack = agent.micStream.getAudioTracks()[0];
+    if (micTrack) {
+      // Replace track on all peer hostMicTransceivers — no renegotiation
+      for (const [idx, peer] of agent.peers.entries()) {
+        if (peer.hostMicTransceiver) {
+          try {
+            await peer.hostMicTransceiver.sender.replaceTrack(micTrack);
+            console.log(`[host] ✅ Mic track set for viewer #${idx}`);
+          } catch (err) {
+            console.warn(`[host] Could not set mic for viewer #${idx}:`, err.message);
           }
-        }
-
-        // CRITICAL: Renegotiate so viewer receives the new audio track
-        try {
-          const offer = await agent.pc.createOffer();
-          await agent.pc.setLocalDescription(offer);
-          if (agent.ws?.readyState === WebSocket.OPEN) {
-            agent.ws.send(JSON.stringify({
-              type: 'offer',
-              sdp: { type: agent.pc.localDescription.type, sdp: agent.pc.localDescription.sdp },
-            }));
-            console.log('[host] 📤 Renegotiation offer sent (mic added)');
-          }
-        } catch (err) {
-          console.error('[host] ❌ Renegotiation failed:', err.message);
         }
       }
     }
@@ -712,12 +704,18 @@ async function agentStartMic() {
   }
 }
 
-// Stop host microphone
+// Stop host microphone — releases OS mic icon
 function agentStopMic() {
   if (agent.micStream) {
     agent.micStream.getTracks().forEach(t => t.stop());
     agent.micStream = null;
     console.log('[host] 🎤 Microphone stopped');
+  }
+  // Detach mic track from all peer senders
+  for (const [, peer] of agent.peers.entries()) {
+    if (peer.hostMicTransceiver) {
+      peer.hostMicTransceiver.sender.replaceTrack(null).catch(() => {});
+    }
   }
 }
 
