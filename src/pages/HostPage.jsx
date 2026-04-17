@@ -425,6 +425,10 @@ async function agentCreateOffer(viewerId) {
         console.log(`[host] 🔊 Cleaning up old audio element`);
         peerState.viewerAudioEl.pause();
         peerState.viewerAudioEl.srcObject = null;
+        // Remove old audio element from DOM
+        if (peerState.viewerAudioEl.parentNode) {
+          peerState.viewerAudioEl.parentNode.removeChild(peerState.viewerAudioEl);
+        }
       }
       const audio = new Audio();
       // Use the stream directly — when viewer calls replaceTrack(), the stream
@@ -434,10 +438,16 @@ async function agentCreateOffer(viewerId) {
       audio.autoplay = true;
       audio.muted = (agent.audioMode === 'off');
       
+      // CRITICAL FIX: Append audio element to DOM for reliable playback
+      // Many browsers require audio elements to be in the DOM to play properly
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
+      
       console.log(`[host] 🔊 Audio element created:`);
       console.log(`[host] 🔊   - autoplay: ${audio.autoplay}`);
       console.log(`[host] 🔊   - muted: ${audio.muted}`);
       console.log(`[host] 🔊   - volume: ${audio.volume}`);
+      console.log(`[host] 🔊   - attached to DOM: true`);
       
       audio.play().then(() => {
         console.log(`[host] 🔊 ✅ Audio playback started successfully`);
