@@ -234,16 +234,30 @@ async function agentCreateOffer(viewerId) {
 
   // Add audio transceivers upfront — NO renegotiation ever needed after this
   // sendonly: host mic → viewer  |  recvonly: viewer mic → host
+  console.log(`[host] 🎤 ═══ CREATING AUDIO TRANSCEIVERS FOR VIEWER ${viewerId} ═══`);
   const hostMicTransceiver = pc.addTransceiver('audio', { direction: 'sendonly' });
+  console.log(`[host] 🎤 Created hostMicTransceiver (host→viewer):`);
+  console.log(`[host] 🎤   - direction: ${hostMicTransceiver.direction}`);
+  console.log(`[host] 🎤   - currentDirection: ${hostMicTransceiver.currentDirection}`);
+  console.log(`[host] 🎤   - mid: ${hostMicTransceiver.mid}`);
+  
   const viewerMicTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+  console.log(`[host] 🎤 Created viewerMicTransceiver (viewer→host):`);
+  console.log(`[host] 🎤   - direction: ${viewerMicTransceiver.direction}`);
+  console.log(`[host] 🎤   - currentDirection: ${viewerMicTransceiver.currentDirection}`);
+  console.log(`[host] 🎤   - mid: ${viewerMicTransceiver.mid}`);
+  
   peerState.hostMicTransceiver = hostMicTransceiver;
   peerState.viewerMicTransceiver = viewerMicTransceiver;
   // If mic already active, attach it now
   if (agent.micStream) {
     const micTrack = agent.micStream.getAudioTracks()[0];
-    if (micTrack) hostMicTransceiver.sender.replaceTrack(micTrack).catch(() => {});
+    if (micTrack) {
+      hostMicTransceiver.sender.replaceTrack(micTrack).catch(() => {});
+      console.log(`[host] 🎤 Attached host mic track to hostMicTransceiver`);
+    }
   }
-  console.log(`[host] ✅ Audio transceivers added for viewer ${viewerId}`);
+  console.log(`[host] 🎤 ═══ AUDIO TRANSCEIVERS SETUP COMPLETE ═══`);
 
   // CREATE DATA CHANNEL (HOST SIDE ONLY)
   const dc = pc.createDataChannel('control', { ordered: true });
