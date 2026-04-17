@@ -707,11 +707,12 @@ async function agentStartMic() {
 // Stop host microphone — releases OS mic icon
 function agentStopMic() {
   if (agent.micStream) {
+    // CRITICAL: stop() releases the hardware and removes the OS mic icon
     agent.micStream.getTracks().forEach(t => t.stop());
     agent.micStream = null;
-    console.log('[host] 🎤 Microphone stopped');
+    console.log('[host] 🎤 Microphone stopped — hardware released');
   }
-  // Detach mic track from all peer senders
+  // Detach mic track from all peer senders so WebRTC stops using it
   for (const [, peer] of agent.peers.entries()) {
     if (peer.hostMicTransceiver) {
       peer.hostMicTransceiver.sender.replaceTrack(null).catch(() => {});
