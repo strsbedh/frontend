@@ -416,14 +416,29 @@ async function agentCreateOffer(viewerId) {
       console.log(`[host] 🔊 Transceiver mid: ${event.transceiver?.mid}`);
       console.log(`[host] 🔊 Current audio mode: ${agent.audioMode}`);
       
-      // CRITICAL: Only play audio from the viewerMicTransceiver (viewer→host)
-      // The hostMicTransceiver (host→viewer) also fires ontrack but we should ignore it
-      if (event.transceiver !== peerState.viewerMicTransceiver) {
-        console.log(`[host] 🔊 ⏭️  Ignoring track from hostMicTransceiver (host→viewer)`);
+      // CRITICAL FIX: Identify viewer→host transceiver by checking if it HAS a track (not by reference)
+      // The viewer sends audio on ONE transceiver, the host sends on the OTHER
+      // We need to play audio from whichever transceiver is RECEIVING (has a track)
+      const isReceivingTrack = event.transceiver && event.track;
+      const hasHostMicAttached = peerState.hostMicTransceiver?.sender?.track !== null;
+      
+      console.log(`[host] 🔊 Transceiver analysis:`);
+      console.log(`[host] 🔊   - event.transceiver === hostMicTransceiver: ${event.transceiver === peerState.hostMicTransceiver}`);
+      console.log(`[host] 🔊   - event.transceiver === viewerMicTransceiver: ${event.transceiver === peerState.viewerMicTransceiver}`);
+      console.log(`[host] 🔊   - hostMicTransceiver has track: ${hasHostMicAttached}`);
+      console.log(`[host] 🔊   - This transceiver is receiving: ${isReceivingTrack}`);
+      
+      // If this is the transceiver we're SENDING on (hostMicTransceiver with our mic attached),
+      // then this ontrack event is for our OWN audio looping back - ignore it
+      if (event.transceiver === peerState.hostMicTransceiver && hasHostMicAttached) {
+        console.log(`[host] 🔊 ⏭️  Ignoring loopback from hostMicTransceiver (our own mic)`);
         return;
       }
       
-      console.log(`[host] 🔊 ✅ This is the viewer→host transceiver, creating audio element`);
+      console.log(`[host] 🔊 ✅ This is incoming audio from viewer, creating audio element`);
+      
+      // Store which transceiver is actually receiving viewer audio
+      peerState.actualViewerMicTransceiver = event.transceiver;
       
       // Store reference on peerState so we can mute it when audio mode changes
       if (peerState.viewerAudioEl) {
@@ -493,11 +508,13 @@ async function agentCreateOffer(viewerId) {
       
       // CRITICAL DIAGNOSTIC: Log WebRTC stats to verify audio bytes are flowing
       const statsInterval = setInterval(() => {
-        if (!peerState.viewerMicTransceiver || !peerState.pc) {
+        // Use the actual transceiver that's receiving viewer audio
+        const receivingTransceiver = peerState.actualViewerMicTransceiver || peerState.viewerMicTransceiver;
+        if (!receivingTransceiver || !peerState.pc) {
           clearInterval(statsInterval);
           return;
         }
-        peerState.viewerMicTransceiver.receiver.getStats().then(stats => {
+        receivingTransceiver.receiver.getStats().then(stats => {
           stats.forEach(report => {
             if (report.type === 'inbound-rtp' && report.kind === 'audio') {
               console.log(`[host] 📊 Audio RTP stats:`, {
