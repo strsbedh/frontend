@@ -374,19 +374,34 @@ async function agentCreateOffer(viewerId) {
   // TRACK EVENT — receives viewer's mic in 2-way mode
   pc.ontrack = (event) => {
     if (event.track.kind === 'audio') {
+      console.log(`[host] 🔊 Audio track received from viewer ${viewerId}, state: ${event.track.readyState}`);
+      
       // Store reference on peerState so we can mute it when audio mode changes
       if (peerState.viewerAudioEl) {
         peerState.viewerAudioEl.pause();
         peerState.viewerAudioEl.srcObject = null;
       }
       const audio = new Audio();
-      audio.srcObject = event.streams[0] || new MediaStream([event.track]);
+      // Use the stream directly — when viewer calls replaceTrack(), the stream
+      // automatically gets the new track without needing a new Audio element
+      const stream = event.streams[0] || new MediaStream([event.track]);
+      audio.srcObject = stream;
       audio.autoplay = true;
-      // Start muted if audio mode is off
       audio.muted = (agent.audioMode === 'off');
       audio.play().catch(() => {});
       peerState.viewerAudioEl = audio;
-      console.log(`[host] 🔊 Playing viewer ${viewerId} audio (muted: ${audio.muted})`);
+      peerState.viewerAudioStream = stream;
+      
+      // When track becomes active (viewer enables mic), ensure audio plays
+      event.track.onunmute = () => {
+        console.log(`[host] 🎤 Viewer ${viewerId} mic track unmuted — ensuring playback`);
+        if (peerState.viewerAudioEl && agent.audioMode !== 'off') {
+          peerState.viewerAudioEl.muted = false;
+          peerState.viewerAudioEl.play().catch(() => {});
+        }
+      };
+      
+      console.log(`[host] 🔊 Audio element created for viewer ${viewerId} (muted: ${audio.muted})`);
     }
   };
 
