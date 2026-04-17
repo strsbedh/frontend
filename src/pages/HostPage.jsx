@@ -225,6 +225,11 @@ async function agentCreateOffer(viewerId) {
     console.log(`[host] ✅ Track added to viewer ${viewerId}: ${track.kind}`);
   });
 
+  // Add a recvonly audio transceiver so we can receive viewer's mic in 2-way mode
+  // This avoids needing renegotiation when viewer enables their mic
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+  console.log(`[host] ✅ Audio recvonly transceiver added for viewer ${viewerId}`);
+
   // CREATE DATA CHANNEL (HOST SIDE ONLY)
   const dc = pc.createDataChannel('control', { ordered: true });
   peerState.dc = dc;
@@ -693,9 +698,29 @@ async function agentSetAudioMode(mode) {
   if (mode === 'off') {
     agentStopMic();
     _setMicActive(false);
+    // Also disable any incoming viewer audio tracks on all peers
+    for (const [, peer] of agent.peers.entries()) {
+      if (peer.pc) {
+        peer.pc.getReceivers().forEach(r => {
+          if (r.track?.kind === 'audio') {
+            r.track.enabled = false;
+          }
+        });
+      }
+    }
   } else {
     await agentStartMic();
     _setMicActive(true);
+    // Re-enable incoming viewer audio tracks
+    for (const [, peer] of agent.peers.entries()) {
+      if (peer.pc) {
+        peer.pc.getReceivers().forEach(r => {
+          if (r.track?.kind === 'audio') {
+            r.track.enabled = true;
+          }
+        });
+      }
+    }
   }
 }
 const QUALITY_PRESETS = {
