@@ -416,40 +416,19 @@ async function agentCreateOffer(viewerId) {
       console.log(`[host] 🔊 Transceiver mid: ${event.transceiver?.mid}`);
       console.log(`[host] 🔊 Current audio mode: ${agent.audioMode}`);
       
-      // CRITICAL FIX: Identify viewer→host transceiver by checking if it HAS a track (not by reference)
-      // The viewer sends audio on ONE transceiver, the host sends on the OTHER
-      // We need to play audio from whichever transceiver is RECEIVING (has a track)
-      const isReceivingTrack = event.transceiver && event.track;
-      const hasHostMicAttached = peerState.hostMicTransceiver?.sender?.track !== null;
-      
-      console.log(`[host] 🔊 Transceiver analysis:`);
-      console.log(`[host] 🔊   - event.transceiver === hostMicTransceiver: ${event.transceiver === peerState.hostMicTransceiver}`);
-      console.log(`[host] 🔊   - event.transceiver === viewerMicTransceiver: ${event.transceiver === peerState.viewerMicTransceiver}`);
-      console.log(`[host] 🔊   - hostMicTransceiver has track: ${hasHostMicAttached}`);
-      console.log(`[host] 🔊   - This transceiver is receiving: ${isReceivingTrack}`);
-      
-      // If this is the transceiver we're SENDING on (hostMicTransceiver with our mic attached),
-      // then this ontrack event is for our OWN audio looping back - ignore it
-      if (event.transceiver === peerState.hostMicTransceiver && hasHostMicAttached) {
-        console.log(`[host] 🔊 ⏭️  Ignoring loopback from hostMicTransceiver (our own mic)`);
+      // CRITICAL FIX: Only create audio element for the FIRST audio track
+      // WebRTC fires ontrack for BOTH transceivers, but we only want ONE audio element
+      // The viewer sends audio on ONE transceiver - we should only play that one
+      if (peerState.viewerAudioEl) {
+        console.log(`[host] 🔊 ⏭️  Audio element already exists, ignoring duplicate track`);
         return;
       }
       
-      console.log(`[host] 🔊 ✅ This is incoming audio from viewer, creating audio element`);
+      console.log(`[host] 🔊 ✅ Creating audio element for viewer audio`);
       
       // Store which transceiver is actually receiving viewer audio
       peerState.actualViewerMicTransceiver = event.transceiver;
       
-      // Store reference on peerState so we can mute it when audio mode changes
-      if (peerState.viewerAudioEl) {
-        console.log(`[host] 🔊 Cleaning up old audio element`);
-        peerState.viewerAudioEl.pause();
-        peerState.viewerAudioEl.srcObject = null;
-        // Remove old audio element from DOM
-        if (peerState.viewerAudioEl.parentNode) {
-          peerState.viewerAudioEl.parentNode.removeChild(peerState.viewerAudioEl);
-        }
-      }
       const audio = new Audio();
       // Use the stream directly — when viewer calls replaceTrack(), the stream
       // automatically gets the new track without needing a new Audio element
