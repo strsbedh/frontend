@@ -408,7 +408,17 @@ async function agentCreateOffer(viewerId) {
         console.log(`[host] 🔊 Stream audio tracks: ${event.streams[0].getAudioTracks().length}`);
       }
       console.log(`[host] 🔊 Transceiver direction: ${event.transceiver?.direction}`);
+      console.log(`[host] 🔊 Transceiver mid: ${event.transceiver?.mid}`);
       console.log(`[host] 🔊 Current audio mode: ${agent.audioMode}`);
+      
+      // CRITICAL: Only play audio from the viewerMicTransceiver (viewer→host)
+      // The hostMicTransceiver (host→viewer) also fires ontrack but we should ignore it
+      if (event.transceiver !== peerState.viewerMicTransceiver) {
+        console.log(`[host] 🔊 ⏭️  Ignoring track from hostMicTransceiver (host→viewer)`);
+        return;
+      }
+      
+      console.log(`[host] 🔊 ✅ This is the viewer→host transceiver, creating audio element`);
       
       // Store reference on peerState so we can mute it when audio mode changes
       if (peerState.viewerAudioEl) {
