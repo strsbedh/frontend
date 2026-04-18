@@ -979,7 +979,15 @@ async function switchToGdiCapture(reason = 'capture failure') {
 
     const unlockCheck = setInterval(async () => {
       try {
+        // Check if GDI cooldown is still active
+        const isCooldownActive = await window.electronAPI?.isGdiCooldownActive?.();
+        if (isCooldownActive) {
+          console.log('[host] 🔒 GDI cooldown still active, waiting...');
+          return;
+        }
         const checkId = await window.electronAPI.getScreenSourceId();
+        // Only switch back if we're NOT in GDI cooldown period
+        // The main process handles the cooldown logic
         if (checkId && !checkId.startsWith('gdi-locked-screen:')) {
           console.log('[host] 🔓 Screen unlocked - switching back to normal capture');
           clearInterval(unlockCheck);
@@ -1149,9 +1157,18 @@ async function agentStartStream() {
         agent.gdiCanvas = canvas;
         
         // Monitor for screen unlock — when desktopCapturer works again, switch back
+        // But only if GDI mode has been active for more than 10 seconds (cooldown period)
         const unlockCheckInterval = setInterval(async () => {
           try {
+            // Check if GDI cooldown is still active
+            const isCooldownActive = await window.electronAPI?.isGdiCooldownActive?.();
+            if (isCooldownActive) {
+              console.log('[host] 🔒 GDI cooldown still active, waiting...');
+              return;
+            }
             const checkId = await window.electronAPI.getScreenSourceId();
+            // Only switch back if we're NOT in GDI cooldown period
+            // The main process handles the cooldown logic
             if (checkId && !checkId.startsWith('gdi-locked-screen:')) {
               console.log('[host] 🔓 Screen unlocked! Switching back to normal capture...');
               clearInterval(unlockCheckInterval);
