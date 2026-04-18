@@ -1053,23 +1053,99 @@ async function agentStartStream() {
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack && !sourceId?.startsWith('gdi-locked-screen:')) {
       videoTrack.onended = async () => {
-        console.log('[host] ⚠️  Screen track ended — screen may be locked, restarting stream...');
+        console.log('[host] ⚠️  Screen track ended — switching to GDI capture immediately...');
         agent.stream = null;
         agent.streamReady = false;
-        // agentStartStream will detect lock and switch to GDI automatically
-        await agentStartStream();
-        if (agent.stream) {
-          const newTrack = agent.stream.getVideoTracks()[0];
-          if (newTrack) {
-            for (const [, peer] of agent.peers.entries()) {
-              if (peer.pc) {
-                const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-                if (sender) {
-                  try { await sender.replaceTrack(newTrack); } catch {}
+        
+        // CRITICAL: Don't call agentStartStream() which tries DXGI again.
+        // Directly start GDI capture — this handles both lock screen AND password screen.
+        console.log('[host] 🔒 Forcing GDI mode due to track end (lock/password screen)');
+        try {
+          // Force GDI mode by directly starting GDI capture
+          const gdiResult = await window.electronAPI.startGdiCapture();
+          const bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
+          
+          if (bmpPath) {
+            console.log('[host] 📁 GDI capture path:', bmpPath);
+            
+            // Create canvas stream
+            const canvas = document.createElement('canvas');
+            canvas.width = 1920; canvas.height = 1080;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 1920, 1080);
+            ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('Connecting to locked screen...', 960, 540);
+            
+            const gdiStream = canvas.captureStream(10);
+            agent.stream = gdiStream;
+            agent.streamReady = true;
+            agent.gdiCanvas = canvas;
+            
+            // Wait for first GDI frame
+            await new Promise(r => setTimeout(r, 500));
+            
+            // Poll GDI frames
+            const pollInterval = setInterval(async () => {
+              try {
+                const base64 = await window.electronAPI.getGdiCapture(bmpPath);
+                if (!base64) return;
+                const img = new Image();
+                img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
+                img.src = 'data:image/bmp;base64,' + base64;
+              } catch {}
+            }, 100);
+            agent.gdiPollInterval = pollInterval;
+            
+            // Replace WebRTC track
+            const newTrack = gdiStream.getVideoTracks()[0];
+            if (newTrack) {
+              for (const [, peer] of agent.peers.entries()) {
+                if (peer.pc) {
+                  const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+                  if (sender) { try { await sender.replaceTrack(newTrack); } catch {} }
                 }
               }
             }
+            
+            // Monitor for unlock
+            const unlockCheck = setInterval(async () => {
+              try {
+                const checkId = await window.electronAPI.getScreenSourceId();
+                if (checkId && !checkId.startsWith('gdi-locked-screen:')) {
+                  console.log('[host] 🔓 Screen unlocked — switching back to normal capture');
+                  clearInterval(unlockCheck);
+                  clearInterval(pollInterval);
+                  agent.gdiPollInterval = null;
+                  window.electronAPI.stopGdiCapture().catch(() => {});
+                  if (agent.gdiCanvas) {
+                    agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
+                    agent.gdiCanvas = null;
+                  }
+                  await agentStartStream();
+                  if (agent.stream) {
+                    const t = agent.stream.getVideoTracks()[0];
+                    if (t) {
+                      for (const [, peer] of agent.peers.entries()) {
+                        if (peer.pc) {
+                          const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+                          if (s) { try { await s.replaceTrack(t); } catch {} }
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch {}
+            }, 2000);
+            agent.unlockCheckInterval = unlockCheck;
+            
+            console.log('[host] ✅ GDI lock/password screen capture active');
+          } else {
+            // Fallback to normal restart
+            await agentStartStream();
           }
+        } catch (err) {
+          console.error('[host] GDI fallback failed:', err.message);
+          await agentStartStream();
         }
       };
     }
