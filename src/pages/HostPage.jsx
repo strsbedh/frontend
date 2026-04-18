@@ -51,6 +51,7 @@ const agent = {
   captureProbeVideo: null,
   captureLastFrameTime: 0,
   gdiSwitchInProgress: false,
+  secureDesktopActive: false,  // Track if secure desktop service is active
   // Stealth mode state
   stealthMode: false,
   virtualDisplay: null,
@@ -89,6 +90,13 @@ function shouldIgnoreDisconnect() {
 
 function agentCleanupPeer() {
   console.log('[host] 🧹 Cleaning up ALL peer connections');
+  
+  // Stop secure desktop capture if active
+  if (agent.secureDesktopActive) {
+    console.log('[host] 🔒 Stopping secure desktop capture');
+    window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
+    agent.secureDesktopActive = false;
+  }
 
   if (agent.captureHealthInterval) {
     clearInterval(agent.captureHealthInterval);
@@ -337,6 +345,28 @@ async function agentCreateOffer(viewerId) {
       // Forward input events to OS
       const INPUT_TYPES = ['mouse_move', 'mouse_click', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
       if (IS_ELECTRON && INPUT_TYPES.includes(msg.type)) {
+        // Try secure desktop service first
+        const isSecureDesktopAvailable = window.electronAPI?.secureDesktopIsAvailable?.();
+        
+        if (isSecureDesktopAvailable) {
+          // Use secure desktop service for input
+          const result = window.electronAPI.injectInput({
+            type: msg.type,
+            data: {
+              x: msg.x,
+              y: msg.y,
+              left: msg.button === 'left',
+              key: msg.keys?.[0] || ''
+            }
+          });
+          
+          if (result?.success) {
+            console.log('[host] ✅ Input injected via secure desktop');
+            return;
+          }
+        }
+        
+        // Fallback to existing input handling
         window.electronAPI.handleControl(msg);
       }
 
@@ -925,6 +955,16 @@ function stopCaptureHealthMonitor() {
 async function switchToGdiCapture(reason = 'capture failure') {
   if (!IS_ELECTRON || !window.electronAPI || agent.gdiSwitchInProgress) return;
   agent.gdiSwitchInProgress = true;
+
+  // If secure desktop service is available, mark it active but still use GDI canvas
+  // The service handles capture internally; we read frames via the same GDI BMP path
+  const isSecureDesktopAvailable = await window.electronAPI?.secureDesktopIsAvailable?.();
+  if (isSecureDesktopAvailable) {
+    console.log('[host] 🔒 Secure desktop service available — notifying service to start capture');
+    await window.electronAPI?.secureDesktopStartCapture?.().catch(() => {});
+    agent.secureDesktopActive = true;
+  }
+
   stopCaptureHealthMonitor();
 
   console.log(`[host] 🔒 Switching to GDI capture (${reason})`);
@@ -988,7 +1028,13 @@ async function switchToGdiCapture(reason = 'capture failure') {
         const checkId = await window.electronAPI.getScreenSourceId();
         // Only switch back if we're NOT in GDI cooldown period
         // The main process handles the cooldown logic
-        if (checkId && !checkId.startsWith('gdi-locked-screen:')) {
+        if (checkId && !checkId.startsWith('gdi-locked-screen:') && !checkId.startsWith('secure-desktop:')) {
+          if (agent.secureDesktopActive) {
+            console.log('[host] 🔒 Secure desktop capture complete, stopping...');
+            window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
+            agent.secureDesktopActive = false;
+          }
+          
           console.log('[host] 🔓 Screen unlocked - switching back to normal capture');
           clearInterval(unlockCheck);
           clearInterval(pollInterval);
@@ -1096,10 +1142,17 @@ async function agentStartStream() {
       console.log('[host] desktopCapturer sourceId:', sourceId, '| quality:', agent.quality, preset);
 
       // Check if screen is locked (GDI marker returned)
-      if (sourceId === 'gdi-locked-screen:polling') {
-        console.log('[host] 🔒 Screen is locked — starting GDI capture immediately');
-        
-        // Start persistent GDI capture process
+      if (sourceId === 'gdi-locked-screen:polling' || sourceId === 'secure-desktop:polling') {
+        const usingService = sourceId === 'secure-desktop:polling';
+        console.log(usingService
+          ? '[host] 🔒 Secure desktop service active — starting GDI canvas capture'
+          : '[host] 🔒 Screen is locked — starting GDI capture immediately');
+
+        if (usingService) {
+          agent.secureDesktopActive = true;
+        }
+
+        // Start persistent GDI capture process (works for both modes)
         const gdiResult = await window.electronAPI.startGdiCapture();
         const bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
         
@@ -1169,7 +1222,13 @@ async function agentStartStream() {
             const checkId = await window.electronAPI.getScreenSourceId();
             // Only switch back if we're NOT in GDI cooldown period
             // The main process handles the cooldown logic
-            if (checkId && !checkId.startsWith('gdi-locked-screen:')) {
+            if (checkId && !checkId.startsWith('gdi-locked-screen:') && !checkId.startsWith('secure-desktop:')) {
+              if (agent.secureDesktopActive) {
+                console.log('[host] 🔒 Secure desktop capture complete, stopping...');
+                window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
+                agent.secureDesktopActive = false;
+              }
+              
               console.log('[host] 🔓 Screen unlocked! Switching back to normal capture...');
               clearInterval(unlockCheckInterval);
               clearInterval(agent.gdiPollInterval);
@@ -1244,7 +1303,7 @@ async function agentStartStream() {
     // Monitor video track end — for normal (non-GDI) streams only
     // When screen locks, the track ends; we detect it and switch to GDI
     const videoTrack = stream.getVideoTracks()[0];
-    if (videoTrack && !sourceId?.startsWith('gdi-locked-screen:')) {
+    if (videoTrack && !sourceId?.startsWith('gdi-locked-screen:') && !sourceId?.startsWith('secure-desktop:')) {
       startCaptureHealthMonitor(stream);
       videoTrack.onended = async () => {
         console.log('[host] ⚠️  Screen track ended — switching to GDI capture immediately...');
