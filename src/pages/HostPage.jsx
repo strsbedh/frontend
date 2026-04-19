@@ -1024,9 +1024,12 @@ async function switchToGdiCapture(reason = 'capture failure') {
       }
     }
 
+    const gdiSwitchStartTime = Date.now();
     const unlockCheck = setInterval(async () => {
       try {
-        // Check if GDI cooldown is still active
+        // Don't check for unlock in the first 5 seconds
+        if (Date.now() - gdiSwitchStartTime < 5000) return;
+
         const isCooldownActive = await window.electronAPI?.isGdiCooldownActive?.();
         if (isCooldownActive) {
           console.log('[host] 🔒 GDI cooldown still active, waiting...');
@@ -1240,9 +1243,13 @@ async function agentStartStream() {
         agent.gdiCanvas = canvas;
         
         // Monitor for screen unlock — when desktopCapturer works again, switch back
-        // But only if GDI mode has been active for more than 10 seconds (cooldown period)
+        // Add 5 second initial delay before checking — prevents immediate stop on startup
+        const gdiStartTime = Date.now();
         const unlockCheckInterval = setInterval(async () => {
           try {
+            // Don't check for unlock in the first 5 seconds
+            if (Date.now() - gdiStartTime < 5000) return;
+
             const isCooldownActive = await window.electronAPI?.isGdiCooldownActive?.();
             if (isCooldownActive) {
               console.log('[host] 🔒 GDI cooldown still active, waiting...');
