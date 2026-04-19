@@ -940,7 +940,7 @@ function stopCaptureHealthMonitor() {
   agent.captureLastFrameTime = 0;
 }
 
-async function switchToGdiCapture(reason = 'capture failure') {
+async function switchToGdiCapture(reason = 'capture failure', force = false) {
   if (!IS_ELECTRON || !window.electronAPI) return;
 
   // Debounce — prevent concurrent transitions
@@ -959,11 +959,14 @@ async function switchToGdiCapture(reason = 'capture failure') {
   }
 
   // Check actual screen state — ONLY switch if screen is locked/secure
-  const screenState = await window.electronAPI.checkScreenState?.().catch(() => 'normal');
-  if (screenState === 'normal') {
-    console.log(`[host] ℹ️  switchToGdiCapture called (${reason}) but screen is normal — ignoring`);
-    agent.__switching = false;
-    return;
+  // Skip this check if force=true (e.g. videoTrack.onended — we know screen is locked)
+  if (!force) {
+    const screenState = await window.electronAPI.checkScreenState?.().catch(() => 'normal');
+    if (screenState === 'normal') {
+      console.log(`[host] ℹ️  switchToGdiCapture called (${reason}) but screen is normal — ignoring`);
+      agent.__switching = false;
+      return;
+    }
   }
 
   console.log(`[host] 🔒 Switching to GDI capture (${reason}), screen state: ${screenState}`);
@@ -1201,10 +1204,13 @@ async function agentStartStream() {
     if (videoTrack && !sourceId?.startsWith('gdi-locked-screen:') && !sourceId?.startsWith('secure-desktop:')) {
       startCaptureHealthMonitor(stream);
       videoTrack.onended = async () => {
-        console.log('[host] ⚠️  Screen track ended — switching to GDI capture immediately...');
+        console.log('[host] ⚠️  Screen track ended — screen is locked, switching to GDI');
         agent.stream = null;
         agent.streamReady = false;
-        await switchToGdiCapture('video track ended');
+        // Track ended = screen locked. Force GDI regardless of checkScreenState result.
+        agent.captureMode = 'dxgi';
+        agent.__switching = false;
+        await switchToGdiCapture('video track ended', true);
       };
     }
   } catch (err) {
