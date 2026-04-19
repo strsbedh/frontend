@@ -1199,19 +1199,38 @@ async function agentStartStream() {
     console.log('✅ Screen capture started:', tracks.map(t => `${t.kind}:${t.id.slice(0,8)}`));
 
     // Monitor video track end — for normal (non-GDI) streams only
-    // When screen locks, the track ends; we detect it and switch to GDI
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack && !sourceId?.startsWith('gdi-locked-screen:') && !sourceId?.startsWith('secure-desktop:')) {
       startCaptureHealthMonitor(stream);
       videoTrack.onended = async () => {
-        console.log('[host] ⚠️  Screen track ended — screen is locked, switching to GDI');
+        console.log('[host] ⚠️  Screen track ended — switching to GDI');
         agent.stream = null;
         agent.streamReady = false;
-        // Track ended = screen locked. Force GDI regardless of checkScreenState result.
         agent.captureMode = 'dxgi';
         agent.__switching = false;
         await switchToGdiCapture('video track ended', true);
       };
+
+      // Poll for lock screen every 3 seconds — videoTrack.onended doesn't fire in Electron
+      // when screen locks. We detect it by checking the source ID.
+      const lockPollInterval = setInterval(async () => {
+        if (agent.captureMode !== 'dxgi') {
+          clearInterval(lockPollInterval);
+          return;
+        }
+        try {
+          const newSourceId = await window.electronAPI.getScreenSourceId();
+          if (newSourceId === 'gdi-locked-screen:polling' || newSourceId === 'secure-desktop:polling') {
+            console.log('[host] 🔒 Lock screen detected via poll — switching to GDI');
+            clearInterval(lockPollInterval);
+            agent.stream = null;
+            agent.streamReady = false;
+            agent.captureMode = 'dxgi';
+            agent.__switching = false;
+            await switchToGdiCapture('lock screen poll', true);
+          }
+        } catch {}
+      }, 3000);
     }
   } catch (err) {
     const msg = err.name === 'NotAllowedError'
