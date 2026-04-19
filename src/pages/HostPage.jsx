@@ -50,9 +50,17 @@ const agent = {
   captureHealthInterval: null,
   captureProbeVideo: null,
   captureLastFrameTime: 0,
-  gdiSwitchInProgress: false,
-  gdiCaptureActive: false,   // True while GDI/secure-desktop canvas capture is running
-  secureDesktopActive: false,  // Track if secure desktop service is active
+  // ── Capture state machine ─────────────────────────────────────
+  // captureMode: 'dxgi' | 'gdi' | 'service'
+  // ONLY transitions via setCaptureMode() — never directly
+  captureMode: 'dxgi',
+  __switching: false,        // debounce flag — prevents concurrent transitions
+  gdiCanvas: null,
+  gdiPollInterval: null,
+  unlockCheckInterval: null,
+  gdiSwitchInProgress: false,  // kept for health monitor compat
+  gdiCaptureActive: false,     // kept for compat
+  secureDesktopActive: false,
   // Stealth mode state
   stealthMode: false,
   virtualDisplay: null,
@@ -92,12 +100,8 @@ function shouldIgnoreDisconnect() {
 function agentCleanupPeer() {
   console.log('[host] 🧹 Cleaning up ALL peer connections');
   
-  // Stop secure desktop capture if active AND no stream is running via GDI
-  if (agent.secureDesktopActive && !agent.gdiPollInterval) {
-    console.log('[host] 🔒 Stopping secure desktop capture');
-    window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
-    agent.secureDesktopActive = false;
-  }
+  // NEVER touch GDI/service capture here — capture mode is independent of peer connections
+  // GDI/service only stops when screen unlocks (in the unlock check interval)
 
   if (agent.captureHealthInterval) {
     clearInterval(agent.captureHealthInterval);
@@ -113,23 +117,6 @@ function agentCleanupPeer() {
   }
   agent.captureLastFrameTime = 0;
   agent.gdiSwitchInProgress = false;
-
-  // Only stop GDI capture if no peers remain (don't kill it mid-session)
-  if (agent.gdiPollInterval && agent.peers.size === 0 && !agent.gdiCaptureActive) {
-    clearInterval(agent.gdiPollInterval);
-    agent.gdiPollInterval = null;
-    window.electronAPI?.stopGdiCapture?.().catch(() => {});
-  }
-  if (agent.unlockCheckInterval && agent.peers.size === 0) {
-    clearInterval(agent.unlockCheckInterval);
-    agent.unlockCheckInterval = null;
-  }
-  
-  // Remove GDI canvas from DOM only if stopping GDI
-  if (!agent.gdiPollInterval && agent.gdiCanvas) {
-    try { agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas); } catch {}
-    agent.gdiCanvas = null;
-  }
 
   // Clean up all viewer peers
   for (const [viewerId, peer] of agent.peers.entries()) {
@@ -954,31 +941,42 @@ function stopCaptureHealthMonitor() {
 }
 
 async function switchToGdiCapture(reason = 'capture failure') {
-  if (!IS_ELECTRON || !window.electronAPI || agent.gdiSwitchInProgress) return;
-  agent.gdiSwitchInProgress = true;
+  if (!IS_ELECTRON || !window.electronAPI) return;
 
-  // Set sentinel IMMEDIATELY — before any async work — to block re-entrant agentStartStream calls
-  agent.gdiPollInterval = agent.gdiPollInterval || true;
-  agent.gdiCaptureActive = true;
+  // Debounce — prevent concurrent transitions
+  if (agent.__switching) {
+    console.log('[host] ⏭️  switchToGdiCapture debounced');
+    return;
+  }
+  agent.__switching = true;
+  setTimeout(() => { agent.__switching = false; }, 3000);
 
-  // Only notify the service if we're actually on the secure desktop (password/lock screen)
-  const screenState = await window.electronAPI.checkScreenState?.().catch(() => 'normal');
-  if (screenState === 'secure-desktop') {
-    console.log('[host] 🔒 Secure desktop detected in switchToGdiCapture — notifying service');
-    await window.electronAPI?.secureDesktopStartCapture?.().catch(() => {});
-    agent.secureDesktopActive = true;
+  // Hard lock — if already in GDI or service mode, do nothing
+  if (agent.captureMode === 'gdi' || agent.captureMode === 'service') {
+    console.log(`[host] ⏭️  Already in ${agent.captureMode} mode — skipping switchToGdiCapture`);
+    agent.__switching = false;
+    return;
   }
 
-  stopCaptureHealthMonitor();
+  // Check actual screen state — ONLY switch if screen is locked/secure
+  const screenState = await window.electronAPI.checkScreenState?.().catch(() => 'normal');
+  if (screenState === 'normal') {
+    console.log(`[host] ℹ️  switchToGdiCapture called (${reason}) but screen is normal — ignoring`);
+    agent.__switching = false;
+    return;
+  }
 
-  console.log(`[host] 🔒 Switching to GDI capture (${reason})`);
+  console.log(`[host] 🔒 Switching to GDI capture (${reason}), screen state: ${screenState}`);
+  agent.captureMode = 'gdi';
+  agent.gdiCaptureActive = true;
+  agent.gdiSwitchInProgress = true;
+
+  stopCaptureHealthMonitor();
 
   try {
     const gdiResult = await window.electronAPI.startGdiCapture();
     const bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
     if (!bmpPath) throw new Error('GDI capture path not available');
-
-    console.log('[host] 📁 GDI capture path:', bmpPath);
 
     const canvas = document.createElement('canvas');
     canvas.width = 1920;
@@ -1002,7 +1000,11 @@ async function switchToGdiCapture(reason = 'capture failure') {
 
     const pollInterval = setInterval(async () => {
       try {
-        const base64 = await window.electronAPI.getGdiCapture(bmpPath);
+        // Check if service has taken over (password screen)
+        const activePath = agent.captureMode === 'service'
+          ? (agent.serviceFramePath || bmpPath)
+          : bmpPath;
+        const base64 = await window.electronAPI.getGdiCapture(activePath);
         if (!base64) return;
         const img = new Image();
         img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
@@ -1021,37 +1023,52 @@ async function switchToGdiCapture(reason = 'capture failure') {
       }
     }
 
-    const gdiSwitchStartTime = Date.now();
+    // Start the unlock check — polls screen state every 2s
+    // ONLY stops GDI when screen is actually unlocked
+    const gdiStartTime = Date.now();
     const unlockCheck = setInterval(async () => {
       try {
-        // Don't check for unlock in the first 5 seconds
-        if (Date.now() - gdiSwitchStartTime < 5000) return;
+        if (Date.now() - gdiStartTime < 5000) return; // 5s minimum before checking
 
-        const isCooldownActive = await window.electronAPI?.isGdiCooldownActive?.();
-        if (isCooldownActive) {
-          console.log('[host] 🔒 GDI cooldown still active, waiting...');
-          return;
-        }
-        const screenState = await window.electronAPI.checkScreenState();
-        if (screenState === 'normal') {
+        const state = await window.electronAPI.checkScreenState();
+        console.log(`[host] 🔍 Screen state check: ${state} (mode: ${agent.captureMode})`);
+
+        if (state === 'secure-desktop' && agent.captureMode === 'gdi') {
+          // Transition to service mode — service writes frames to same BMP path
+          console.log('[host] 🔒 Password screen detected — switching to service capture');
+          agent.captureMode = 'service';
+          const captureResult = await window.electronAPI.secureDesktopStartCapture();
+          agent.serviceFramePath = captureResult?.framePath;
+          agent.secureDesktopActive = true;
+          console.log('[host] 🔒 Service capture active, frame path:', agent.serviceFramePath);
+        } else if (state === 'normal') {
+          // Screen unlocked — stop everything and go back to DXGI
+          console.log('[host] 🔓 Screen unlocked — stopping GDI/service, resuming DXGI');
+          clearInterval(unlockCheck);
+          clearInterval(pollInterval);
+          agent.unlockCheckInterval = null;
+          agent.gdiPollInterval = null;
+          agent.gdiCaptureActive = false;
+          agent.gdiSwitchInProgress = false;
+          agent.captureMode = 'dxgi';
+
+          // ONLY place stopGdiCapture is called
+          window.electronAPI.stopGdiCapture().catch(() => {});
           if (agent.secureDesktopActive) {
-            console.log('[host] 🔒 Secure desktop capture complete, stopping...');
             window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
             agent.secureDesktopActive = false;
           }
-          
-          console.log('[host] 🔓 Screen unlocked - switching back to normal capture');
-          clearInterval(unlockCheck);
-          clearInterval(pollInterval);
-          agent.gdiPollInterval = null;
-          agent.gdiCaptureActive = false;
-          window.electronAPI.stopGdiCapture().catch(() => {});
+          agent.serviceFramePath = null;
+
           if (agent.gdiCanvas) {
             agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
             agent.gdiCanvas = null;
           }
-          agent.gdiSwitchInProgress = false;
+
+          agent.stream = null;
+          agent.streamReady = false;
           await agentStartStream();
+
           if (agent.stream) {
             const t = agent.stream.getVideoTracks()[0];
             if (t) {
@@ -1064,21 +1081,26 @@ async function switchToGdiCapture(reason = 'capture failure') {
             }
           }
         }
+        // If state === 'locked' or 'secure-desktop' and already in service mode — keep running
       } catch {}
     }, 2000);
     agent.unlockCheckInterval = unlockCheck;
 
-    console.log('[host] ✅ GDI lock/password screen capture active');
+    console.log('[host] ✅ GDI lock-screen capture active');
   } catch (err) {
     console.error('[host] GDI fallback failed:', err.message);
+    agent.captureMode = 'dxgi';
     agent.gdiCaptureActive = false;
   } finally {
     agent.gdiSwitchInProgress = false;
+    agent.__switching = false;
   }
 }
 
 function startCaptureHealthMonitor(stream) {
-  if (!IS_ELECTRON || !stream || agent.gdiPollInterval) return;
+  // Health monitor is intentionally minimal — does NOT trigger GDI fallback
+  // GDI is only triggered by get-screen-source-id or videoTrack.onended
+  if (!IS_ELECTRON || !stream) return;
   stopCaptureHealthMonitor();
 
   const probeVideo = document.createElement('video');
@@ -1092,52 +1114,18 @@ function startCaptureHealthMonitor(stream) {
   agent.captureProbeVideo = probeVideo;
   agent.captureLastFrameTime = Date.now();
 
-  probeVideo.onplaying = () => {
-    agent.captureLastFrameTime = Date.now();
-  };
-  probeVideo.ontimeupdate = () => {
-    agent.captureLastFrameTime = Date.now();
-  };
-  probeVideo.onloadeddata = () => {
-    agent.captureLastFrameTime = Date.now();
-  };
-
+  probeVideo.onplaying = () => { agent.captureLastFrameTime = Date.now(); };
+  probeVideo.ontimeupdate = () => { agent.captureLastFrameTime = Date.now(); };
+  probeVideo.onloadeddata = () => { agent.captureLastFrameTime = Date.now(); };
   probeVideo.play().catch(() => {});
-
-  let lastTime = 0;
-  agent.captureHealthInterval = setInterval(() => {
-    if (agent.gdiPollInterval || agent.gdiSwitchInProgress) return;
-
-    const currentTime = probeVideo.currentTime || 0;
-    if (currentTime > lastTime) {
-      lastTime = currentTime;
-      agent.captureLastFrameTime = Date.now();
-      return;
-    }
-
-    const stalledMs = Date.now() - agent.captureLastFrameTime;
-    if (stalledMs > 2500) {
-      console.warn(`[host] ⚠️ Capture stream appears frozen for ${stalledMs}ms - checking screen state before GDI fallback`);
-      // Only switch to GDI if screen is actually locked/secure desktop
-      // Don't trigger GDI for transient DXGI failures on normal desktop
-      window.electronAPI?.checkScreenState?.().then(state => {
-        if (state === 'locked' || state === 'secure-desktop') {
-          console.warn(`[host] ⚠️ Screen state: ${state} — switching to GDI`);
-          switchToGdiCapture('frozen DXGI capture');
-        } else {
-          console.log(`[host] ℹ️ Screen state: ${state} — ignoring frozen stream (transient DXGI error)`);
-        }
-      }).catch(() => switchToGdiCapture('frozen DXGI capture'));
-    }
-  }, 1000);
 }
 
 async function agentStartStream() {
   console.log('🖥️  Initializing screen capture (quality:', agent.quality, ')...');
 
   // Guard: don't restart if GDI/secure-desktop capture is already running
-  if (agent.gdiPollInterval || agent.gdiCaptureActive) {
-    console.log('[host] ⏭️  GDI/secure-desktop capture already active — skipping agentStartStream');
+  if (agent.captureMode !== 'dxgi' || agent.gdiCaptureActive) {
+    console.log('[host] ⏭️  Not in DXGI mode — skipping agentStartStream');
     return;
   }
 
@@ -1164,144 +1152,14 @@ async function agentStartStream() {
       sourceId = await window.electronAPI.getScreenSourceId();
       console.log('[host] desktopCapturer sourceId:', sourceId, '| quality:', agent.quality, preset);
 
-      // Check if screen is locked (GDI marker returned)
+      // Check if screen is locked — delegate entirely to switchToGdiCapture state machine
       if (sourceId === 'gdi-locked-screen:polling' || sourceId === 'secure-desktop:polling') {
-        const usingService = sourceId === 'secure-desktop:polling';
-        console.log(usingService
-          ? '[host] 🔒 Secure desktop service active — starting GDI canvas capture'
-          : '[host] 🔒 Screen is locked — starting GDI capture immediately');
-
-        // Set sentinel IMMEDIATELY so any re-entrant agentStartStream calls bail out
-        // before canvas.captureStream() fires the media permission event
-        agent.gdiPollInterval = agent.gdiPollInterval || true;
-        agent.gdiCaptureActive = true;
-
-        if (usingService) {
-          agent.secureDesktopActive = true;
-          console.log('[host] 🔒 Service will capture secure desktop frames');
-        }
-
-        // Get the BMP path where frames are written
-        let bmpPath;
-        if (usingService) {
-          // Service writes to SYSTEM temp — get actual path from service response
-          const captureResult = await window.electronAPI.secureDesktopStartCapture();
-          bmpPath = captureResult?.framePath || await window.electronAPI.getServiceFramePath();
-          console.log('[host] 🔒 Service frame path:', bmpPath);
-        } else {
-          const gdiResult = await window.electronAPI.startGdiCapture();
-          bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
-        }
-
-        if (!bmpPath) {
-          throw new Error('GDI capture path not available');
-        }
-        
-        console.log('[host] 📁 GDI capture path:', bmpPath);
-        
-        // Create canvas stream for locked screen
-        const canvas = document.createElement('canvas');
-        canvas.width = 1920;
-        canvas.height = 1080;
-        canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-        document.body.appendChild(canvas);
-        const ctx = canvas.getContext('2d');
-        
-        // Draw initial black frame so stream has content immediately
-        ctx.fillStyle = '#111';
-        ctx.fillRect(0, 0, 1920, 1080);
-        ctx.fillStyle = '#fff';
-        ctx.font = '32px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Connecting to locked screen...', 960, 540);
-        
-        stream = canvas.captureStream(10); // 10 FPS
-        
-        console.log('[host] 📹 Canvas stream created, tracks:', stream.getTracks().length);
-        
-        // Wait a moment for GDI process to produce first frame
-        await new Promise(r => setTimeout(r, 500));
-        
-        // Poll for GDI frames — read file directly
-        let frameCount = 0;
-        let lastMtime = 0;
-        const pollInterval = setInterval(async () => {
-          try {
-            const base64 = await window.electronAPI.getGdiCapture(bmpPath);
-            if (!base64) return;
-            
-            const img = new Image();
-            img.onload = () => {
-              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-              frameCount++;
-              if (frameCount === 1) console.log('[host] ✅ First GDI frame drawn to canvas!');
-              if (frameCount % 50 === 0) console.log(`[host] 📸 GDI frames: ${frameCount}`);
-            };
-            img.src = 'data:image/bmp;base64,' + base64;
-          } catch (err) {
-            // Silently continue
-          }
-        }, 100);
-        
-        agent.gdiPollInterval = pollInterval;
-        agent.gdiCanvas = canvas;
-        
-        // Monitor for screen unlock — when desktopCapturer works again, switch back
-        // Add 5 second initial delay before checking — prevents immediate stop on startup
-        const gdiStartTime = Date.now();
-        const unlockCheckInterval = setInterval(async () => {
-          try {
-            // Don't check for unlock in the first 5 seconds
-            if (Date.now() - gdiStartTime < 5000) return;
-
-            const isCooldownActive = await window.electronAPI?.isGdiCooldownActive?.();
-            if (isCooldownActive) {
-              console.log('[host] 🔒 GDI cooldown still active, waiting...');
-              return;
-            }
-            const screenState = await window.electronAPI.checkScreenState();
-            if (screenState === 'normal') {
-              if (agent.secureDesktopActive) {
-                console.log('[host] 🔒 Secure desktop capture complete, stopping...');
-                window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
-                agent.secureDesktopActive = false;
-              }
-              
-              console.log('[host] 🔓 Screen unlocked! Switching back to normal capture...');
-              clearInterval(unlockCheckInterval);
-              clearInterval(agent.gdiPollInterval);
-              agent.gdiPollInterval = null;
-              agent.gdiCaptureActive = false;
-              window.electronAPI.stopGdiCapture().catch(() => {});
-              
-              if (agent.gdiCanvas) {
-                agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
-                agent.gdiCanvas = null;
-              }
-              
-              agent.stream = null;
-              agent.streamReady = false;
-              await agentStartStream();
-              
-              if (agent.stream) {
-                const newTrack = agent.stream.getVideoTracks()[0];
-                if (newTrack) {
-                  for (const [, peer] of agent.peers.entries()) {
-                    if (peer.pc) {
-                      const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-                      if (sender) {
-                        try { await sender.replaceTrack(newTrack); } catch {}
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          } catch {}
-        }, 2000);
-        
-        agent.unlockCheckInterval = unlockCheckInterval;
-        console.log('✅ GDI locked-screen capture active');
+        console.log('[host] 🔒 Screen locked/secure desktop — delegating to switchToGdiCapture');
+        // Force captureMode to 'dxgi' temporarily so switchToGdiCapture doesn't bail out
+        agent.captureMode = 'dxgi';
+        agent.__switching = false;
+        await switchToGdiCapture('locked screen detected');
+        return; // switchToGdiCapture handles everything including stream setup
       } else {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
