@@ -59,17 +59,11 @@ const agent = {
   captureHealthInterval: null,
   captureProbeVideo: null,
   captureLastFrameTime: 0,
-  // ── Capture state machine ─────────────────────────────────────
-  // captureMode: 'dxgi' | 'gdi' | 'service'
-  // ONLY transitions via setCaptureMode() — never directly
-  captureMode: 'dxgi',
-  __switching: false,        // debounce flag — prevents concurrent transitions
+  gdiSwitchInProgress: false,
+  gdiCaptureActive: false,
   gdiCanvas: null,
   gdiPollInterval: null,
   unlockCheckInterval: null,
-  gdiSwitchInProgress: false,  // kept for health monitor compat
-  gdiCaptureActive: false,     // kept for compat
-  secureDesktopActive: false,
   // Stealth mode state
   stealthMode: false,
   virtualDisplay: null,
@@ -121,17 +115,15 @@ function initLockScreenHandler() {
     console.log('[host] 🔔 Lock event received:', state, 'bmpPath:', bmpPath);
     if (state === 'locked') {
       // Prevent double-setup
-      if (agent.captureMode === 'gdi') {
+      if (agent.gdiCaptureActive) {
         console.log('[host] ⏭️  Already in GDI mode — ignoring duplicate lock event');
         return;
       }
       console.log('[host] 🔒 Lock event — setting up canvas, path:', bmpPath);
-      agent.captureMode = 'gdi';
       agent.gdiCaptureActive = true;
 
       if (!bmpPath) {
         console.error('[host] No BMP path in lock event');
-        agent.captureMode = 'dxgi';
         agent.gdiCaptureActive = false;
         return;
       }
@@ -197,7 +189,7 @@ function initLockScreenHandler() {
       console.log('[host] ✅ Lock screen canvas active');
 
     } else if (state === 'normal') {
-      if (agent.captureMode === 'dxgi') {
+      if (!agent.gdiCaptureActive) {
         console.log('[host] ⏭️  Already in DXGI mode — ignoring duplicate unlock event');
         return;
       }
@@ -209,7 +201,6 @@ function initLockScreenHandler() {
       }
       agent.gdiPollInterval = null;
       agent.gdiCaptureActive = false;
-      agent.captureMode = 'dxgi';
       if (agent.gdiCanvas) {
         agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
         agent.gdiCanvas = null;
@@ -473,28 +464,6 @@ async function agentCreateOffer(viewerId) {
       // Forward input events to OS
       const INPUT_TYPES = ['mouse_move', 'mouse_click', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
       if (IS_ELECTRON && INPUT_TYPES.includes(msg.type)) {
-        // Try secure desktop service first
-        const isSecureDesktopAvailable = window.electronAPI?.secureDesktopIsAvailable?.();
-        
-        if (isSecureDesktopAvailable) {
-          // Use secure desktop service for input
-          const result = window.electronAPI.injectInput({
-            type: msg.type,
-            data: {
-              x: msg.x,
-              y: msg.y,
-              left: msg.button === 'left',
-              key: msg.keys?.[0] || ''
-            }
-          });
-          
-          if (result?.success) {
-            console.log('[host] ✅ Input injected via secure desktop');
-            return;
-          }
-        }
-        
-        // Fallback to existing input handling
         window.electronAPI.handleControl(msg);
       }
 
@@ -1080,109 +1049,9 @@ function stopCaptureHealthMonitor() {
   agent.captureLastFrameTime = 0;
 }
 
-async function switchToGdiCapture(reason = 'capture failure', force = false) {
-  if (!IS_ELECTRON || !window.electronAPI) return;
-
-  // Debounce — prevent concurrent transitions
-  if (agent.__switching) {
-    console.log('[host] ⏭️  switchToGdiCapture debounced');
-    return;
-  }
-  agent.__switching = true;
-  setTimeout(() => { agent.__switching = false; }, 3000);
-
-  // Hard lock — if already in GDI or service mode, do nothing
-  if (agent.captureMode === 'gdi' || agent.captureMode === 'service') {
-    console.log(`[host] ⏭️  Already in ${agent.captureMode} mode — skipping switchToGdiCapture`);
-    agent.__switching = false;
-    return;
-  }
-
-  // Check actual screen state — ONLY switch if screen is locked/secure
-  // Skip this check if force=true (e.g. videoTrack.onended — we know screen is locked)
-  if (!force) {
-    const screenState = await window.electronAPI.checkScreenState?.().catch(() => 'normal');
-    if (screenState === 'normal') {
-      console.log(`[host] ℹ️  switchToGdiCapture called (${reason}) but screen is normal — ignoring`);
-      agent.__switching = false;
-      return;
-    }
-  }
-
-  console.log(`[host] 🔒 Switching to GDI capture (${reason}), screen state: ${screenState}`);
-  agent.captureMode = 'gdi';
-  agent.gdiCaptureActive = true;
-  agent.gdiSwitchInProgress = true;
-
-  stopCaptureHealthMonitor();
-
-  try {
-    const gdiResult = await window.electronAPI.startGdiCapture();
-    const bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
-    if (!bmpPath) throw new Error('GDI capture path not available');
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 1920;
-    canvas.height = 1080;
-    canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-    document.body.appendChild(canvas);
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#fff';
-    ctx.font = '32px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Connecting to locked screen...', 960, 540);
-
-    const gdiStream = canvas.captureStream(10);
-    agent.stream = gdiStream;
-    agent.streamReady = true;
-    agent.gdiCanvas = canvas;
-
-    await new Promise(r => setTimeout(r, 500));
-
-    const pollInterval = setInterval(async () => {
-      try {
-        // Check if service has taken over (password screen)
-        const activePath = agent.captureMode === 'service'
-          ? (agent.serviceFramePath || bmpPath)
-          : bmpPath;
-        const base64 = await window.electronAPI.getGdiCapture(activePath);
-        if (!base64) return;
-        const img = new Image();
-        img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
-        img.src = 'data:image/bmp;base64,' + base64;
-      } catch {}
-    }, 100);
-    agent.gdiPollInterval = pollInterval;
-
-    const newTrack = gdiStream.getVideoTracks()[0];
-    if (newTrack) {
-      for (const [, peer] of agent.peers.entries()) {
-        if (peer.pc) {
-          const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) { try { await sender.replaceTrack(newTrack); } catch {} }
-        }
-      }
-    }
-
-    // Unlock is handled by initLockScreenHandler() at module level
-    agent.unlockCheckInterval = null;
-
-    console.log('[host] ✅ GDI lock-screen capture active');
-  } catch (err) {
-    console.error('[host] GDI fallback failed:', err.message);
-    agent.captureMode = 'dxgi';
-    agent.gdiCaptureActive = false;
-  } finally {
-    agent.gdiSwitchInProgress = false;
-    agent.__switching = false;
-  }
-}
-
 function startCaptureHealthMonitor(stream) {
   // Health monitor is intentionally minimal — does NOT trigger GDI fallback
-  // GDI is only triggered by get-screen-source-id or videoTrack.onended
+  // GDI is only triggered by main.js lock monitor via IPC events
   if (!IS_ELECTRON || !stream) return;
   stopCaptureHealthMonitor();
 
@@ -1206,9 +1075,9 @@ function startCaptureHealthMonitor(stream) {
 async function agentStartStream() {
   console.log('🖥️  Initializing screen capture (quality:', agent.quality, ')...');
 
-  // Guard: don't restart if GDI/secure-desktop capture is already running
-  if (agent.captureMode !== 'dxgi' || agent.gdiCaptureActive) {
-    console.log('[host] ⏭️  Not in DXGI mode — skipping agentStartStream');
+  // Guard: don't restart if GDI capture is already running
+  if (agent.gdiCaptureActive) {
+    console.log('[host] ⏭️  GDI capture already active — skipping agentStartStream');
     return;
   }
 
@@ -1235,14 +1104,11 @@ async function agentStartStream() {
       sourceId = await window.electronAPI.getScreenSourceId();
       console.log('[host] desktopCapturer sourceId:', sourceId, '| quality:', agent.quality, preset);
 
-      // Check if screen is locked — delegate entirely to switchToGdiCapture state machine
+      // Check if screen is locked — main.js lock monitor handles this via IPC events
+      // If we somehow get here with a locked source ID, just return and let the monitor handle it
       if (sourceId === 'gdi-locked-screen:polling' || sourceId === 'secure-desktop:polling') {
-        console.log('[host] 🔒 Screen locked/secure desktop — delegating to switchToGdiCapture');
-        // Force captureMode to 'dxgi' temporarily so switchToGdiCapture doesn't bail out
-        agent.captureMode = 'dxgi';
-        agent.__switching = false;
-        await switchToGdiCapture('locked screen detected');
-        return; // switchToGdiCapture handles everything including stream setup
+        console.log('[host] 🔒 Screen locked — lock monitor will handle via IPC event');
+        return;
       } else {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
