@@ -1174,18 +1174,17 @@ async function agentStartStream() {
           console.log('[host] 🔒 Stopped user-session GDI — service will capture secure desktop');
         }
 
-        // Start persistent GDI capture process (works for both modes)
-        // For secure-desktop mode, the service writes frames; we still need the path
+        // Get the BMP path where frames are written
         let bmpPath;
         if (usingService) {
-          // Service writes to the same fixed path — get it without starting PS process
-          bmpPath = await window.electronAPI.getGdiFramePath();
+          // Service writes to SYSTEM temp — get actual path from service response
+          const captureResult = await window.electronAPI.secureDesktopStartCapture();
+          bmpPath = captureResult?.framePath || await window.electronAPI.getServiceFramePath();
+          console.log('[host] 🔒 Service frame path:', bmpPath);
         } else {
           const gdiResult = await window.electronAPI.startGdiCapture();
           bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
         }
-        
-        if (!bmpPath) {
           throw new Error('GDI capture path not available');
         }
         
