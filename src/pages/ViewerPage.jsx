@@ -27,6 +27,9 @@ export default function ViewerPage() {
   const [quality, setQuality] = useState('medium');
   const [audioMode, setAudioMode] = useState('off');
   const [viewerId, setViewerId] = useState(null); // Store viewer_id from backend
+  const [isScreenLocked, setIsScreenLocked] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [unlockStatus, setUnlockStatus] = useState(''); // '', 'sending', 'error', 'success'
 
   const viewerMicStreamRef = useRef(null); // viewer's mic stream for 2-way
 
@@ -58,6 +61,13 @@ export default function ViewerPage() {
       dataChannelRef.current.send(JSON.stringify(event));
     }
   }, []);
+
+  const sendUnlockRequest = useCallback(() => {
+    if (!unlockPassword || !dataChannelRef.current || dataChannelRef.current.readyState !== 'open') return;
+    setUnlockStatus('sending');
+    dataChannelRef.current.send(JSON.stringify({ type: 'unlock_request', password: unlockPassword }));
+    setUnlockPassword('');
+  }, [unlockPassword]);
 
   const cleanupPeer = useCallback(() => {
     console.log('[viewer] Cleaning up peer connection...');
@@ -299,6 +309,32 @@ export default function ViewerPage() {
             return;
           }
           
+          // Handle screen lock/unlock notifications from host
+          if (msg.type === 'screen_locked') {
+            console.log('[viewer] 🔒 Host screen locked');
+            setIsScreenLocked(true);
+            setUnlockPassword('');
+            setUnlockStatus('');
+            return;
+          }
+          if (msg.type === 'screen_unlocked') {
+            console.log('[viewer] 🔓 Host screen unlocked');
+            setIsScreenLocked(false);
+            setUnlockPassword('');
+            setUnlockStatus('');
+            return;
+          }
+          // Handle unlock result
+          if (msg.type === 'unlock_result') {
+            if (msg.success) {
+              setUnlockStatus('success');
+              setTimeout(() => { setIsScreenLocked(false); setUnlockStatus(''); }, 2000);
+            } else {
+              setUnlockStatus('error');
+            }
+            return;
+          }
+
           // Handle clipboard sync from host
           if (msg.type === 'clipboard') {
             if (msg.text && msg.text.length <= 1024 * 1024) {
@@ -1061,6 +1097,41 @@ export default function ViewerPage() {
                 >
                   <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
                   CONTROLLING
+                </div>
+              )}
+
+              {/* Screen locked overlay */}
+              {isScreenLocked && (
+                <div className="absolute inset-0 bg-zinc-900/95 flex flex-col items-center justify-center gap-4 z-10">
+                  <div className="text-center">
+                    <div className="text-4xl mb-3">🔒</div>
+                    <p className="text-white text-lg font-semibold mb-1">Screen Locked</p>
+                    <p className="text-zinc-400 text-sm">Enter the Windows password to unlock remotely</p>
+                  </div>
+                  <div className="flex flex-col gap-3 w-72">
+                    <input
+                      type="password"
+                      value={unlockPassword}
+                      onChange={e => { setUnlockPassword(e.target.value); setUnlockStatus(''); }}
+                      onKeyDown={e => { if (e.key === 'Enter') sendUnlockRequest(); }}
+                      placeholder="Windows password"
+                      className="w-full px-4 py-2.5 bg-zinc-800 border border-zinc-600 text-white placeholder-zinc-500 rounded focus:outline-none focus:border-blue-500 text-sm"
+                      autoFocus
+                    />
+                    {unlockStatus === 'error' && (
+                      <p className="text-red-400 text-xs text-center">❌ Incorrect password. Try again.</p>
+                    )}
+                    {unlockStatus === 'success' && (
+                      <p className="text-green-400 text-xs text-center">✅ Unlocking...</p>
+                    )}
+                    <button
+                      onClick={sendUnlockRequest}
+                      disabled={!unlockPassword || unlockStatus === 'sending'}
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded text-sm font-medium transition-colors"
+                    >
+                      {unlockStatus === 'sending' ? 'Unlocking...' : 'Unlock Screen'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

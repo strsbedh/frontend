@@ -122,6 +122,13 @@ function initLockScreenHandler() {
       console.log('[host] 🔒 Lock event — setting up canvas, path:', bmpPath);
       agent.gdiCaptureActive = true;
 
+      // Notify all viewers that screen is locked
+      for (const [, peer] of agent.peers.entries()) {
+        if (peer.dc?.readyState === 'open') {
+          try { peer.dc.send(JSON.stringify({ type: 'screen_locked' })); } catch {}
+        }
+      }
+
       if (!bmpPath) {
         console.error('[host] No BMP path in lock event');
         agent.gdiCaptureActive = false;
@@ -184,6 +191,13 @@ function initLockScreenHandler() {
         return;
       }
       console.log('[host] 🔓 Unlock event — tearing down canvas, resuming DXGI');
+
+      // Notify all viewers that screen is unlocked
+      for (const [, peer] of agent.peers.entries()) {
+        if (peer.dc?.readyState === 'open') {
+          try { peer.dc.send(JSON.stringify({ type: 'screen_unlocked' })); } catch {}
+        }
+      }
 
       if (_lockCanvasPollInterval) {
         clearInterval(_lockCanvasPollInterval);
@@ -477,6 +491,28 @@ async function agentCreateOffer(viewerId) {
                 credential: result.verified ? result.credential : null,
                 username: result.username || '',
               }));
+            }
+          });
+        }
+      }
+
+      // Unlock request from viewer — use stored credential or provided password
+      if (msg.type === 'unlock_request') {
+        const password = msg.password;
+        if (IS_ELECTRON && window.electronAPI && password) {
+          console.log('[host] 🔓 Unlock request received — attempting to unlock screen');
+          window.electronAPI.unlockScreen(password).then(result => {
+            if (peerState.dc?.readyState === 'open') {
+              peerState.dc.send(JSON.stringify({
+                type: 'unlock_result',
+                success: result.success,
+                error: result.error || null,
+              }));
+            }
+            if (result.success) {
+              console.log('[host] ✅ Screen unlocked successfully');
+            } else {
+              console.error('[host] ❌ Unlock failed:', result.error);
             }
           });
         }
