@@ -505,9 +505,11 @@ async function agentCreateOffer(viewerId) {
       // Unlock request from viewer — use stored credential or provided password
       if (msg.type === 'unlock_request') {
         const password = msg.password;
+        console.log('[host] 🔓 unlock_request received. gdiCaptureActive:', agent.gdiCaptureActive, 'password provided:', !!password);
         if (IS_ELECTRON && window.electronAPI && password) {
-          console.log('[host] 🔓 Unlock request received — attempting to unlock screen');
+          console.log('[host] 🔓 Attempting to unlock screen...');
           window.electronAPI.unlockScreen(password).then(result => {
+            console.log('[host] 🔓 Unlock result:', result);
             if (peerState.dc?.readyState === 'open') {
               peerState.dc.send(JSON.stringify({
                 type: 'unlock_result',
@@ -521,6 +523,28 @@ async function agentCreateOffer(viewerId) {
               console.error('[host] ❌ Unlock failed:', result.error);
             }
           });
+        } else {
+          console.warn('[host] ⚠️ unlock_request: IS_ELECTRON=', IS_ELECTRON, 'password=', !!password);
+          if (peerState.dc?.readyState === 'open') {
+            peerState.dc.send(JSON.stringify({
+              type: 'unlock_result',
+              success: false,
+              error: !password ? 'No password provided' : 'Not running in Electron',
+            }));
+          }
+        }
+      }
+
+      // Check lock state request from viewer
+      if (msg.type === 'check_lock_state') {
+        console.log('[host] 🔍 check_lock_state received. gdiCaptureActive:', agent.gdiCaptureActive);
+        if (peerState.dc?.readyState === 'open') {
+          peerState.dc.send(JSON.stringify({
+            type: 'lock_state_response',
+            locked: agent.gdiCaptureActive,
+            isElectron: IS_ELECTRON,
+          }));
+          console.log('[host] 📤 Sent lock_state_response: locked=', agent.gdiCaptureActive);
         }
       }
 
