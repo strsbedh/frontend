@@ -1200,14 +1200,16 @@ async function agentStartStream() {
           agent.__switching = true;
           setTimeout(() => { agent.__switching = false; }, 3000);
 
-          // GDI process already started by main process — just set up canvas
-          const gdiPath = bmpPath || await window.electronAPI.getGdiCapturePath();
-          if (!gdiPath) {
-            console.error('[host] No GDI path available');
+          // Service frame path provided by main.js — service captures both lock screen and password screen
+          const framePath = bmpPath;
+          if (!framePath) {
+            console.error('[host] No service frame path provided');
             agent.captureMode = 'dxgi';
             agent.gdiCaptureActive = false;
             return;
           }
+
+          console.log('[host] 🔒 Setting up canvas to display service frames from:', framePath);
 
           const canvas = document.createElement('canvas');
           canvas.width = 1920; canvas.height = 1080;
@@ -1218,28 +1220,34 @@ async function agentStartStream() {
           ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
           ctx.fillText('Connecting to locked screen...', 960, 540);
 
-          const gdiStream = canvas.captureStream(10);
-          agent.stream = gdiStream;
+          const serviceStream = canvas.captureStream(10);
+          agent.stream = serviceStream;
           agent.streamReady = true;
           agent.gdiCanvas = canvas;
 
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => setTimeout(r, 300));
 
+          // Poll service frame file — service writes frames here continuously
+          // Service calls SwitchToInputDesktop() per frame, so it captures
+          // both lock screen (Default desktop) and password screen (Winlogon desktop)
           let frameCount = 0;
           const pollInterval = setInterval(async () => {
             try {
-              const activePath = agent.captureMode === 'service' ? (agent.serviceFramePath || gdiPath) : gdiPath;
-              const base64 = await window.electronAPI.getGdiCapture(activePath);
+              const base64 = await window.electronAPI.getGdiCapture(framePath);
               if (!base64) return;
               const img = new Image();
-              img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); frameCount++; };
+              img.onload = () => {
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                frameCount++;
+                if (frameCount === 1) console.log('[host] ✅ First service frame displayed');
+              };
               img.src = 'data:image/bmp;base64,' + base64;
             } catch {}
           }, 100);
           agent.gdiPollInterval = pollInterval;
 
-          // Replace WebRTC track
-          const newTrack = gdiStream.getVideoTracks()[0];
+          // Replace WebRTC track with canvas stream
+          const newTrack = serviceStream.getVideoTracks()[0];
           if (newTrack) {
             for (const [, peer] of agent.peers.entries()) {
               if (peer.pc) {
@@ -1249,12 +1257,11 @@ async function agentStartStream() {
             }
           }
 
-          // Renderer does NOT control unlock — main.js sends 'normal' after 5 stable readings
-          // Register unlock handler — main.js is the only brain here
+          // Renderer does NOT decide when to stop — main.js sends 'normal' after 5 stable readings
           const onUnlockEvent = async (state) => {
             if (state !== 'normal') return;
             window.electronAPI?.offScreenLockStateChanged?.(onUnlockEvent);
-            console.log('[host] 🔓 Unlock event — stopping GDI canvas, resuming DXGI');
+            console.log('[host] 🔓 Unlock event — tearing down canvas, resuming DXGI');
             clearInterval(pollInterval);
             agent.gdiPollInterval = null;
             agent.gdiCaptureActive = false;
@@ -1282,7 +1289,7 @@ async function agentStartStream() {
             window.electronAPI.onScreenLockStateChanged(onUnlockEvent);
           }
           agent.unlockCheckInterval = null;
-          console.log('[host] ✅ GDI lock-screen capture active via IPC event');
+          console.log('[host] ✅ Service capture canvas active');
         }
       };
       if (IS_ELECTRON && window.electronAPI?.onScreenLockStateChanged) {
