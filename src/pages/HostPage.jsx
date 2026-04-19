@@ -1211,26 +1211,22 @@ async function agentStartStream() {
         await switchToGdiCapture('video track ended', true);
       };
 
-      // Poll for lock screen every 3 seconds — videoTrack.onended doesn't fire in Electron
-      // when screen locks. We detect it by checking the source ID.
-      const lockPollInterval = setInterval(async () => {
-        if (agent.captureMode !== 'dxgi') {
-          clearInterval(lockPollInterval);
-          return;
+      // Listen for lock screen state changes from main process
+      // Main process monitors desktopCapturer every 2s and sends IPC events
+      const onLockStateChanged = async (state) => {
+        if (state === 'locked' && agent.captureMode === 'dxgi') {
+          console.log('[host] 🔒 Lock screen event received — switching to GDI');
+          window.electronAPI?.offScreenLockStateChanged?.(onLockStateChanged);
+          agent.stream = null;
+          agent.streamReady = false;
+          agent.captureMode = 'dxgi';
+          agent.__switching = false;
+          await switchToGdiCapture('lock screen event', true);
         }
-        try {
-          const newSourceId = await window.electronAPI.getScreenSourceId();
-          if (newSourceId === 'gdi-locked-screen:polling' || newSourceId === 'secure-desktop:polling') {
-            console.log('[host] 🔒 Lock screen detected via poll — switching to GDI');
-            clearInterval(lockPollInterval);
-            agent.stream = null;
-            agent.streamReady = false;
-            agent.captureMode = 'dxgi';
-            agent.__switching = false;
-            await switchToGdiCapture('lock screen poll', true);
-          }
-        } catch {}
-      }, 3000);
+      };
+      if (IS_ELECTRON && window.electronAPI?.onScreenLockStateChanged) {
+        window.electronAPI.onScreenLockStateChanged(onLockStateChanged);
+      }
     }
   } catch (err) {
     const msg = err.name === 'NotAllowedError'
