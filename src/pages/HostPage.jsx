@@ -965,6 +965,9 @@ async function switchToGdiCapture(reason = 'capture failure') {
     agent.secureDesktopActive = true;
   }
 
+  // Set sentinel before any async work so re-entrant calls bail out
+  agent.gdiPollInterval = agent.gdiPollInterval || true;
+
   stopCaptureHealthMonitor();
 
   console.log(`[host] 🔒 Switching to GDI capture (${reason})`);
@@ -1152,6 +1155,10 @@ async function agentStartStream() {
         console.log(usingService
           ? '[host] 🔒 Secure desktop service active — starting GDI canvas capture'
           : '[host] 🔒 Screen is locked — starting GDI capture immediately');
+
+        // Set sentinel IMMEDIATELY so any re-entrant agentStartStream calls bail out
+        // before canvas.captureStream() fires the media permission event
+        agent.gdiPollInterval = agent.gdiPollInterval || true;
 
         if (usingService) {
           agent.secureDesktopActive = true;
