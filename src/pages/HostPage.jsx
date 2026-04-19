@@ -1301,6 +1301,8 @@ async function agentStartStream() {
                 agent.serviceFramePath = null;
                 if (agent.gdiCanvas) { agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas); agent.gdiCanvas = null; }
                 agent.stream = null; agent.streamReady = false;
+                // Tell main process the screen is unlocked so it can re-arm the lock monitor
+                window.electronAPI?.confirmScreenUnlocked?.().catch(() => {});
                 await agentStartStream();
                 if (agent.stream) {
                   const t = agent.stream.getVideoTracks()[0];
