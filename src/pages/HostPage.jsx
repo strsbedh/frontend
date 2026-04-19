@@ -766,10 +766,10 @@ function agentConnectWebSocket() {
       if (agent.ws && agent.ws.readyState === WebSocket.OPEN) {
         agent.ws.send(JSON.stringify({ type: 'ping' }));
         console.log('[host] 📡 Heartbeat ping sent');
-      } else {
-        console.warn('[host] ⚠️  Cannot send heartbeat — WebSocket not open');
-        clearInterval(agent.heartbeat);
-        agent.heartbeat = null;
+      } else if (!agent.ws || agent.ws.readyState === WebSocket.CLOSED) {
+        // WebSocket dropped — reconnect (handles lock screen network pause)
+        console.warn('[host] ⚠️  WebSocket closed — reconnecting...');
+        agentConnectWebSocket();
       }
     }, 5000);
     
