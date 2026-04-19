@@ -957,11 +957,11 @@ async function switchToGdiCapture(reason = 'capture failure') {
   if (!IS_ELECTRON || !window.electronAPI || agent.gdiSwitchInProgress) return;
   agent.gdiSwitchInProgress = true;
 
-  // If secure desktop service is available, mark it active but still use GDI canvas
-  // The service handles capture internally; we read frames via the same GDI BMP path
-  const isSecureDesktopAvailable = await window.electronAPI?.secureDesktopIsAvailable?.();
-  if (isSecureDesktopAvailable) {
-    console.log('[host] 🔒 Secure desktop service available — notifying service to start capture');
+  // Only notify the service if we're actually on the secure desktop (password/lock screen)
+  // Do NOT start service capture for normal DXGI failures or frozen streams
+  const screenState = await window.electronAPI.checkScreenState?.().catch(() => 'normal');
+  if (screenState === 'secure-desktop') {
+    console.log('[host] 🔒 Secure desktop detected in switchToGdiCapture — notifying service');
     await window.electronAPI?.secureDesktopStartCapture?.().catch(() => {});
     agent.secureDesktopActive = true;
     // Stop user-session GDI so service has exclusive write to the frame file
