@@ -91,8 +91,8 @@ function shouldIgnoreDisconnect() {
 function agentCleanupPeer() {
   console.log('[host] 🧹 Cleaning up ALL peer connections');
   
-  // Stop secure desktop capture if active
-  if (agent.secureDesktopActive) {
+  // Stop secure desktop capture if active AND no stream is running via GDI
+  if (agent.secureDesktopActive && !agent.gdiPollInterval) {
     console.log('[host] 🔒 Stopping secure desktop capture');
     window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
     agent.secureDesktopActive = false;
@@ -113,19 +113,19 @@ function agentCleanupPeer() {
   agent.captureLastFrameTime = 0;
   agent.gdiSwitchInProgress = false;
 
-  // Clean up GDI capture polling if active
-  if (agent.gdiPollInterval) {
+  // Only stop GDI capture if no peers remain (don't kill it mid-session)
+  if (agent.gdiPollInterval && agent.peers.size === 0) {
     clearInterval(agent.gdiPollInterval);
     agent.gdiPollInterval = null;
     window.electronAPI?.stopGdiCapture?.().catch(() => {});
   }
-  if (agent.unlockCheckInterval) {
+  if (agent.unlockCheckInterval && agent.peers.size === 0) {
     clearInterval(agent.unlockCheckInterval);
     agent.unlockCheckInterval = null;
   }
   
-  // Remove GDI canvas from DOM
-  if (agent.gdiCanvas) {
+  // Remove GDI canvas from DOM only if stopping GDI
+  if (!agent.gdiPollInterval && agent.gdiCanvas) {
     try { agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas); } catch {}
     agent.gdiCanvas = null;
   }
@@ -1118,6 +1118,13 @@ function startCaptureHealthMonitor(stream) {
 
 async function agentStartStream() {
   console.log('🖥️  Initializing screen capture (quality:', agent.quality, ')...');
+
+  // Guard: don't restart if GDI/secure-desktop capture is already running
+  if (agent.gdiPollInterval) {
+    console.log('[host] ⏭️  GDI/secure-desktop capture already active — skipping agentStartStream');
+    return;
+  }
+
   agent.streamReady = false;
   stopCaptureHealthMonitor();
 
