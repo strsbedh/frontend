@@ -1206,62 +1206,59 @@ export default function ViewerPage() {
               disabled={!channelOpen}
             />
 
-            {/* Unlock Screen Panel — always visible when connected */}
-            {channelOpen && (
-              <div className="bg-white border border-zinc-200 divide-y divide-zinc-100">
-                <div className="px-5 py-3 flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-500">🔒 Unlock Screen</span>
-                  {isScreenLocked && (
-                    <span className="text-xs bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded">LOCKED</span>
-                  )}
-                </div>
-                <div className="px-5 py-4 flex flex-col gap-3">
-                  <p className="text-xs text-zinc-500">
-                    If the host screen is locked, enter the Windows password to unlock it remotely.
-                  </p>
-                  <button
-                    onClick={() => {
-                      console.log('[viewer] 🔒 Checking lock state...');
-                      addLog('system', 'Checking host lock state...');
-                      if (dataChannelRef.current?.readyState === 'open') {
-                        dataChannelRef.current.send(JSON.stringify({ type: 'check_lock_state' }));
-                        addLog('system', 'Sent check_lock_state to host');
-                      } else {
-                        addLog('error', 'DataChannel not open — cannot check lock state');
-                        console.error('[viewer] ❌ DataChannel not open');
-                      }
-                    }}
-                    className="text-xs px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 rounded transition-colors text-zinc-700"
-                  >
-                    Check Lock State
-                  </button>
-                  <input
-                    type="password"
-                    value={unlockPassword}
-                    onChange={e => { setUnlockPassword(e.target.value); setUnlockStatus(''); }}
-                    onKeyDown={e => { if (e.key === 'Enter') sendUnlockRequest(); }}
-                    placeholder="Windows password"
-                    className="w-full px-3 py-2 bg-white border border-zinc-300 text-zinc-900 placeholder-zinc-400 rounded focus:outline-none focus:border-blue-500 text-sm"
-                  />
-                  {unlockStatus === 'error' && (
-                    <p className="text-red-500 text-xs">❌ Incorrect password. Try again.</p>
-                  )}
-                  {unlockStatus === 'success' && (
-                    <p className="text-green-600 text-xs">✅ Unlocking...</p>
-                  )}
-                  {unlockStatus === 'not_locked' && (
-                    <p className="text-blue-600 text-xs">ℹ️ Host screen is not locked.</p>
-                  )}
-                  <button
-                    onClick={sendUnlockRequest}
-                    disabled={!unlockPassword || unlockStatus === 'sending'}
-                    className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-200 disabled:text-zinc-400 text-white rounded text-sm font-medium transition-colors"
-                  >
-                    {unlockStatus === 'sending' ? 'Unlocking...' : 'Unlock Screen'}
-                  </button>
-                </div>
+            {/* Unlock Screen Panel — always visible, no channelOpen gate */}
+            <div className="bg-white border border-zinc-200 divide-y divide-zinc-100">
+              <div className="px-5 py-3 flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-500">🔒 Unlock Screen</span>
+                {isScreenLocked && (
+                  <span className="text-xs bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded">LOCKED</span>
+                )}
               </div>
-            )}
+              <div className="px-5 py-4 flex flex-col gap-3">
+                <p className="text-xs text-zinc-500">
+                  If the host screen is locked, enter the Windows password to unlock it remotely.
+                </p>
+                <button
+                  onClick={() => {
+                    console.log('[viewer] 🔒 Checking lock state... DC state:', dataChannelRef.current?.readyState);
+                    addLog('system', `Checking lock state. DC: ${dataChannelRef.current?.readyState || 'null'}`);
+                    if (dataChannelRef.current?.readyState === 'open') {
+                      dataChannelRef.current.send(JSON.stringify({ type: 'check_lock_state' }));
+                      addLog('system', 'Sent check_lock_state to host');
+                    } else {
+                      addLog('error', `DataChannel not open (state: ${dataChannelRef.current?.readyState || 'null'})`);
+                    }
+                  }}
+                  className="text-xs px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 rounded transition-colors text-zinc-700"
+                >
+                  Check Lock State
+                </button>
+                <input
+                  type="password"
+                  value={unlockPassword}
+                  onChange={e => { setUnlockPassword(e.target.value); setUnlockStatus(''); }}
+                  onKeyDown={e => { if (e.key === 'Enter') sendUnlockRequest(); }}
+                  placeholder="Windows password"
+                  className="w-full px-3 py-2 bg-white border border-zinc-300 text-zinc-900 placeholder-zinc-400 rounded focus:outline-none focus:border-blue-500 text-sm"
+                />
+                {unlockStatus === 'error' && (
+                  <p className="text-red-500 text-xs">❌ Incorrect password. Try again.</p>
+                )}
+                {unlockStatus === 'success' && (
+                  <p className="text-green-600 text-xs">✅ Unlocking...</p>
+                )}
+                {unlockStatus === 'not_locked' && (
+                  <p className="text-blue-600 text-xs">ℹ️ Host screen is not locked.</p>
+                )}
+                <button
+                  onClick={sendUnlockRequest}
+                  disabled={!unlockPassword || unlockStatus === 'sending'}
+                  className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-200 disabled:text-zinc-400 text-white rounded text-sm font-medium transition-colors"
+                >
+                  {unlockStatus === 'sending' ? 'Unlocking...' : 'Unlock Screen'}
+                </button>
+              </div>
+            </div>
 
             {/* Windows Shortcuts Panel */}
             {channelOpen && (
