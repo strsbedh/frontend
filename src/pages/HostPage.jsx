@@ -1274,16 +1274,20 @@ async function agentStartStream() {
 
           // Start unlock check
           const gdiStartTime = Date.now();
+          let normalCount = 0; // debounce: require 3 consecutive 'normal' checks before stopping
           const unlockCheck = setInterval(async () => {
             try {
               if (Date.now() - gdiStartTime < 5000) return;
               const screenState = await window.electronAPI.checkScreenState();
               if (screenState === 'secure-desktop' && agent.captureMode === 'gdi') {
+                normalCount = 0;
                 agent.captureMode = 'service';
                 const captureResult = await window.electronAPI.secureDesktopStartCapture();
                 agent.serviceFramePath = captureResult?.framePath;
                 agent.secureDesktopActive = true;
               } else if (screenState === 'normal') {
+                normalCount++;
+                if (normalCount < 3) return; // debounce: wait for 3 consecutive normal checks
                 clearInterval(unlockCheck);
                 clearInterval(pollInterval);
                 agent.gdiPollInterval = null;
@@ -1311,6 +1315,8 @@ async function agentStartStream() {
                 }
                 // Re-register listener for next lock
                 window.electronAPI?.onScreenLockStateChanged?.(onLockStateChanged);
+              } else {
+                normalCount = 0; // reset debounce on any non-normal state
               }
             } catch {}
           }, 2000);
