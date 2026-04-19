@@ -172,11 +172,15 @@ function initLockScreenHandler() {
 
       // Replace WebRTC track
       const newTrack = lockStream.getVideoTracks()[0];
+      console.log('[host] 🔒 Replacing track on', agent.peers.size, 'peers');
       if (newTrack) {
         for (const [, peer] of agent.peers.entries()) {
           if (peer.pc) {
             const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-            if (sender) { try { await sender.replaceTrack(newTrack); } catch {} }
+            if (sender) {
+              try { await sender.replaceTrack(newTrack); console.log('[host] ✅ Track replaced'); }
+              catch (e) { console.error('[host] replaceTrack failed:', e.message); }
+            }
           }
         }
       }
