@@ -51,6 +51,7 @@ const agent = {
   captureProbeVideo: null,
   captureLastFrameTime: 0,
   gdiSwitchInProgress: false,
+  gdiCaptureActive: false,   // True while GDI/secure-desktop canvas capture is running
   secureDesktopActive: false,  // Track if secure desktop service is active
   // Stealth mode state
   stealthMode: false,
@@ -114,7 +115,7 @@ function agentCleanupPeer() {
   agent.gdiSwitchInProgress = false;
 
   // Only stop GDI capture if no peers remain (don't kill it mid-session)
-  if (agent.gdiPollInterval && agent.peers.size === 0) {
+  if (agent.gdiPollInterval && agent.peers.size === 0 && !agent.gdiCaptureActive) {
     clearInterval(agent.gdiPollInterval);
     agent.gdiPollInterval = null;
     window.electronAPI?.stopGdiCapture?.().catch(() => {});
@@ -963,10 +964,13 @@ async function switchToGdiCapture(reason = 'capture failure') {
     console.log('[host] 🔒 Secure desktop service available — notifying service to start capture');
     await window.electronAPI?.secureDesktopStartCapture?.().catch(() => {});
     agent.secureDesktopActive = true;
+    // Stop user-session GDI so service has exclusive write to the frame file
+    window.electronAPI?.stopGdiCapture?.().catch(() => {});
   }
 
   // Set sentinel before any async work so re-entrant calls bail out
   agent.gdiPollInterval = agent.gdiPollInterval || true;
+  agent.gdiCaptureActive = true;
 
   stopCaptureHealthMonitor();
 
@@ -1040,6 +1044,7 @@ async function switchToGdiCapture(reason = 'capture failure') {
           clearInterval(unlockCheck);
           clearInterval(pollInterval);
           agent.gdiPollInterval = null;
+          agent.gdiCaptureActive = false;
           window.electronAPI.stopGdiCapture().catch(() => {});
           if (agent.gdiCanvas) {
             agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
@@ -1066,6 +1071,7 @@ async function switchToGdiCapture(reason = 'capture failure') {
     console.log('[host] ✅ GDI lock/password screen capture active');
   } catch (err) {
     console.error('[host] GDI fallback failed:', err.message);
+    agent.gdiCaptureActive = false;
   } finally {
     agent.gdiSwitchInProgress = false;
   }
@@ -1121,7 +1127,7 @@ async function agentStartStream() {
   console.log('🖥️  Initializing screen capture (quality:', agent.quality, ')...');
 
   // Guard: don't restart if GDI/secure-desktop capture is already running
-  if (agent.gdiPollInterval) {
+  if (agent.gdiPollInterval || agent.gdiCaptureActive) {
     console.log('[host] ⏭️  GDI/secure-desktop capture already active — skipping agentStartStream');
     return;
   }
@@ -1159,14 +1165,25 @@ async function agentStartStream() {
         // Set sentinel IMMEDIATELY so any re-entrant agentStartStream calls bail out
         // before canvas.captureStream() fires the media permission event
         agent.gdiPollInterval = agent.gdiPollInterval || true;
+        agent.gdiCaptureActive = true;
 
         if (usingService) {
           agent.secureDesktopActive = true;
+          // Stop the user-session GDI process — the service (SYSTEM) will write frames instead
+          window.electronAPI?.stopGdiCapture?.().catch(() => {});
+          console.log('[host] 🔒 Stopped user-session GDI — service will capture secure desktop');
         }
 
         // Start persistent GDI capture process (works for both modes)
-        const gdiResult = await window.electronAPI.startGdiCapture();
-        const bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
+        // For secure-desktop mode, the service writes frames; we still need the path
+        let bmpPath;
+        if (usingService) {
+          // Service writes to the same fixed path — get it without starting PS process
+          bmpPath = await window.electronAPI.getGdiFramePath();
+        } else {
+          const gdiResult = await window.electronAPI.startGdiCapture();
+          bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
+        }
         
         if (!bmpPath) {
           throw new Error('GDI capture path not available');
@@ -1242,6 +1259,7 @@ async function agentStartStream() {
               clearInterval(unlockCheckInterval);
               clearInterval(agent.gdiPollInterval);
               agent.gdiPollInterval = null;
+              agent.gdiCaptureActive = false;
               window.electronAPI.stopGdiCapture().catch(() => {});
               
               if (agent.gdiCanvas) {
