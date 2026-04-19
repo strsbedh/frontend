@@ -151,24 +151,14 @@ function initLockScreenHandler() {
         try {
           const base64 = await window.electronAPI.getGdiCapture(bmpPath);
           if (!base64) return;
-          
-          // BMP is supported by browsers but let's use createImageBitmap for reliability
-          const blob = await fetch('data:image/bmp;base64,' + base64).then(r => r.blob());
-          const bitmap = await createImageBitmap(blob);
-          ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-          bitmap.close();
-          frameCount++;
-          if (frameCount === 1) console.log('[host] ✅ First lock screen frame displayed via bitmap');
-        } catch (err) {
-          // Fallback to img element
-          try {
-            const base64 = await window.electronAPI.getGdiCapture(bmpPath);
-            if (!base64) return;
-            const img = new Image();
-            img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
-            img.src = 'data:image/bmp;base64,' + base64;
-          } catch {}
-        }
+          const img = new Image();
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            frameCount++;
+            if (frameCount === 1) console.log('[host] ✅ First lock screen frame displayed');
+          };
+          img.src = 'data:image/bmp;base64,' + base64;
+        } catch {}
       }, 100);
       agent.gdiPollInterval = _lockCanvasPollInterval;
 
