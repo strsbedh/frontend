@@ -957,20 +957,17 @@ async function switchToGdiCapture(reason = 'capture failure') {
   if (!IS_ELECTRON || !window.electronAPI || agent.gdiSwitchInProgress) return;
   agent.gdiSwitchInProgress = true;
 
+  // Set sentinel IMMEDIATELY — before any async work — to block re-entrant agentStartStream calls
+  agent.gdiPollInterval = agent.gdiPollInterval || true;
+  agent.gdiCaptureActive = true;
+
   // Only notify the service if we're actually on the secure desktop (password/lock screen)
-  // Do NOT start service capture for normal DXGI failures or frozen streams
   const screenState = await window.electronAPI.checkScreenState?.().catch(() => 'normal');
   if (screenState === 'secure-desktop') {
     console.log('[host] 🔒 Secure desktop detected in switchToGdiCapture — notifying service');
     await window.electronAPI?.secureDesktopStartCapture?.().catch(() => {});
     agent.secureDesktopActive = true;
-    // Stop user-session GDI so service has exclusive write to the frame file
-    window.electronAPI?.stopGdiCapture?.().catch(() => {});
   }
-
-  // Set sentinel before any async work so re-entrant calls bail out
-  agent.gdiPollInterval = agent.gdiPollInterval || true;
-  agent.gdiCaptureActive = true;
 
   stopCaptureHealthMonitor();
 
@@ -1172,9 +1169,7 @@ async function agentStartStream() {
 
         if (usingService) {
           agent.secureDesktopActive = true;
-          // Stop the user-session GDI process — the service (SYSTEM) will write frames instead
-          window.electronAPI?.stopGdiCapture?.().catch(() => {});
-          console.log('[host] 🔒 Stopped user-session GDI — service will capture secure desktop');
+          console.log('[host] 🔒 Service will capture secure desktop frames');
         }
 
         // Get the BMP path where frames are written
