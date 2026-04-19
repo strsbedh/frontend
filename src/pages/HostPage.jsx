@@ -20,6 +20,15 @@ import VirtualDisplaySetup from '../components/VirtualDisplaySetup';
 // ---------------------------------------------------------------------------
 const IS_ELECTRON = Boolean(window.electronAPI?.handleControl);
 
+// Register lock screen handler immediately at module load
+// This ensures it's active even before agentInit() runs
+// (main.js may send the event before the React component mounts)
+if (IS_ELECTRON && window.electronAPI?.onScreenLockStateChanged) {
+  // Will be properly initialized in initLockScreenHandler() — this is just an early guard
+  // to ensure the IPC channel is open
+  console.log('[host] 🔌 Electron detected — lock screen IPC channel ready');
+}
+
 // ---------------------------------------------------------------------------
 // Module-level agent state.
 // ---------------------------------------------------------------------------
@@ -103,9 +112,13 @@ function shouldIgnoreDisconnect() {
 let _lockCanvasPollInterval = null;
 
 function initLockScreenHandler() {
-  if (!IS_ELECTRON || !window.electronAPI?.onScreenLockStateChanged) return;
+  if (!IS_ELECTRON || !window.electronAPI?.onScreenLockStateChanged) {
+    console.log('[host] ⚠️ initLockScreenHandler: IS_ELECTRON=', IS_ELECTRON, 'onScreenLockStateChanged=', !!window.electronAPI?.onScreenLockStateChanged);
+    return;
+  }
 
   const handleLockEvent = async (state, bmpPath) => {
+    console.log('[host] 🔔 Lock event received:', state, 'bmpPath:', bmpPath);
     if (state === 'locked') {
       // Prevent double-setup
       if (agent.captureMode === 'gdi') {
