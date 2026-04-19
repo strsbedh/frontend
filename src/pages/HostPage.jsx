@@ -1185,6 +1185,8 @@ async function agentStartStream() {
           const gdiResult = await window.electronAPI.startGdiCapture();
           bmpPath = gdiResult?.path || await window.electronAPI.getGdiCapturePath();
         }
+
+        if (!bmpPath) {
           throw new Error('GDI capture path not available');
         }
         
