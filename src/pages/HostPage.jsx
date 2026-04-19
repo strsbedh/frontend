@@ -1213,15 +1213,109 @@ async function agentStartStream() {
 
       // Listen for lock screen state changes from main process
       // Main process monitors desktopCapturer every 2s and sends IPC events
-      const onLockStateChanged = async (state) => {
+      // Main process also starts GDI process and passes the bmpPath
+      const onLockStateChanged = async (state, bmpPath) => {
         if (state === 'locked' && agent.captureMode === 'dxgi') {
-          console.log('[host] 🔒 Lock screen event received — switching to GDI');
+          console.log('[host] 🔒 Lock screen event received — starting GDI canvas');
           window.electronAPI?.offScreenLockStateChanged?.(onLockStateChanged);
-          agent.stream = null;
-          agent.streamReady = false;
-          agent.captureMode = 'dxgi';
-          agent.__switching = false;
-          await switchToGdiCapture('lock screen event', true);
+          agent.captureMode = 'gdi';
+          agent.gdiCaptureActive = true;
+          agent.__switching = true;
+          setTimeout(() => { agent.__switching = false; }, 3000);
+
+          // GDI process already started by main process — just set up canvas
+          const gdiPath = bmpPath || await window.electronAPI.getGdiCapturePath();
+          if (!gdiPath) {
+            console.error('[host] No GDI path available');
+            agent.captureMode = 'dxgi';
+            agent.gdiCaptureActive = false;
+            return;
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = 1920; canvas.height = 1080;
+          canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+          document.body.appendChild(canvas);
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 1920, 1080);
+          ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
+          ctx.fillText('Connecting to locked screen...', 960, 540);
+
+          const gdiStream = canvas.captureStream(10);
+          agent.stream = gdiStream;
+          agent.streamReady = true;
+          agent.gdiCanvas = canvas;
+
+          await new Promise(r => setTimeout(r, 500));
+
+          let frameCount = 0;
+          const pollInterval = setInterval(async () => {
+            try {
+              const activePath = agent.captureMode === 'service' ? (agent.serviceFramePath || gdiPath) : gdiPath;
+              const base64 = await window.electronAPI.getGdiCapture(activePath);
+              if (!base64) return;
+              const img = new Image();
+              img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); frameCount++; };
+              img.src = 'data:image/bmp;base64,' + base64;
+            } catch {}
+          }, 100);
+          agent.gdiPollInterval = pollInterval;
+
+          // Replace WebRTC track
+          const newTrack = gdiStream.getVideoTracks()[0];
+          if (newTrack) {
+            for (const [, peer] of agent.peers.entries()) {
+              if (peer.pc) {
+                const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+                if (sender) { try { await sender.replaceTrack(newTrack); } catch {} }
+              }
+            }
+          }
+
+          // Start unlock check
+          const gdiStartTime = Date.now();
+          const unlockCheck = setInterval(async () => {
+            try {
+              if (Date.now() - gdiStartTime < 5000) return;
+              const screenState = await window.electronAPI.checkScreenState();
+              if (screenState === 'secure-desktop' && agent.captureMode === 'gdi') {
+                agent.captureMode = 'service';
+                const captureResult = await window.electronAPI.secureDesktopStartCapture();
+                agent.serviceFramePath = captureResult?.framePath;
+                agent.secureDesktopActive = true;
+              } else if (screenState === 'normal') {
+                clearInterval(unlockCheck);
+                clearInterval(pollInterval);
+                agent.gdiPollInterval = null;
+                agent.gdiCaptureActive = false;
+                agent.captureMode = 'dxgi';
+                window.electronAPI.stopGdiCapture().catch(() => {});
+                if (agent.secureDesktopActive) {
+                  window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
+                  agent.secureDesktopActive = false;
+                }
+                agent.serviceFramePath = null;
+                if (agent.gdiCanvas) { agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas); agent.gdiCanvas = null; }
+                agent.stream = null; agent.streamReady = false;
+                await agentStartStream();
+                if (agent.stream) {
+                  const t = agent.stream.getVideoTracks()[0];
+                  if (t) {
+                    for (const [, peer] of agent.peers.entries()) {
+                      if (peer.pc) {
+                        const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+                        if (s) { try { await s.replaceTrack(t); } catch {} }
+                      }
+                    }
+                  }
+                }
+                // Re-register listener for next lock
+                window.electronAPI?.onScreenLockStateChanged?.(onLockStateChanged);
+              }
+            } catch {}
+          }, 2000);
+          agent.unlockCheckInterval = unlockCheck;
+          console.log('[host] ✅ GDI lock-screen capture active via IPC event');
         }
       };
       if (IS_ELECTRON && window.electronAPI?.onScreenLockStateChanged) {
