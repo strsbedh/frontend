@@ -424,6 +424,12 @@ async function agentCreateOffer(viewerId) {
     console.log(`[host] ✅ DataChannel OPEN for viewer ${viewerId}`);
     _setViewerConn(true);
 
+    // If screen is currently locked, immediately notify this viewer
+    if (agent.gdiCaptureActive) {
+      try { dc.send(JSON.stringify({ type: 'screen_locked' })); } catch {}
+      console.log(`[host] 🔒 Notified viewer ${viewerId} that screen is locked`);
+    }
+
     // Start keepalive ping
     peerState.dcKeepalive = setInterval(() => {
       if (peerState.dc?.readyState === 'open') {
