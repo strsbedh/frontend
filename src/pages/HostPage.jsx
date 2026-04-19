@@ -135,15 +135,17 @@ function initLockScreenHandler() {
         return;
       }
 
-      // Set up canvas
+      // Set up canvas — use actual screen dimensions
       const canvas = document.createElement('canvas');
-      canvas.width = 1920; canvas.height = 1080;
+      // Get actual screen size from the BMP or use window.screen
+      canvas.width = window.screen.width || 1920;
+      canvas.height = window.screen.height || 1080;
       canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
       document.body.appendChild(canvas);
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 1920, 1080);
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('Connecting to locked screen...', 960, 540);
+      ctx.fillText('Screen Locked', canvas.width / 2, canvas.height / 2);
 
       const lockStream = canvas.captureStream(10);
       agent.stream = lockStream;
