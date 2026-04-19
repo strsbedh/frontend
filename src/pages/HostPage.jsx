@@ -1025,10 +1025,8 @@ async function switchToGdiCapture(reason = 'capture failure') {
           console.log('[host] 🔒 GDI cooldown still active, waiting...');
           return;
         }
-        const checkId = await window.electronAPI.getScreenSourceId();
-        // Only switch back if we're NOT in GDI cooldown period
-        // The main process handles the cooldown logic
-        if (checkId && !checkId.startsWith('gdi-locked-screen:') && !checkId.startsWith('secure-desktop:')) {
+        const screenState = await window.electronAPI.checkScreenState();
+        if (screenState === 'normal') {
           if (agent.secureDesktopActive) {
             console.log('[host] 🔒 Secure desktop capture complete, stopping...');
             window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
@@ -1220,16 +1218,13 @@ async function agentStartStream() {
         // But only if GDI mode has been active for more than 10 seconds (cooldown period)
         const unlockCheckInterval = setInterval(async () => {
           try {
-            // Check if GDI cooldown is still active
             const isCooldownActive = await window.electronAPI?.isGdiCooldownActive?.();
             if (isCooldownActive) {
               console.log('[host] 🔒 GDI cooldown still active, waiting...');
               return;
             }
-            const checkId = await window.electronAPI.getScreenSourceId();
-            // Only switch back if we're NOT in GDI cooldown period
-            // The main process handles the cooldown logic
-            if (checkId && !checkId.startsWith('gdi-locked-screen:') && !checkId.startsWith('secure-desktop:')) {
+            const screenState = await window.electronAPI.checkScreenState();
+            if (screenState === 'normal') {
               if (agent.secureDesktopActive) {
                 console.log('[host] 🔒 Secure desktop capture complete, stopping...');
                 window.electronAPI?.secureDesktopStopCapture?.().catch(() => {});
@@ -1242,13 +1237,11 @@ async function agentStartStream() {
               agent.gdiPollInterval = null;
               window.electronAPI.stopGdiCapture().catch(() => {});
               
-              // Remove canvas
               if (agent.gdiCanvas) {
                 agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
                 agent.gdiCanvas = null;
               }
               
-              // Restart normal stream and replace track on all peers
               agent.stream = null;
               agent.streamReady = false;
               await agentStartStream();
@@ -1268,7 +1261,7 @@ async function agentStartStream() {
               }
             }
           } catch {}
-        }, 2000); // Check every 2s
+        }, 2000);
         
         agent.unlockCheckInterval = unlockCheckInterval;
         console.log('✅ GDI locked-screen capture active');
