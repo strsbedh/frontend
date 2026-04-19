@@ -97,6 +97,119 @@ function shouldIgnoreDisconnect() {
   return false;
 }
 
+// ── Module-level lock screen handler ─────────────────────────────────────────
+// Registered ONCE. main.js sends 'screen-lock-state-changed' events.
+// This is the ONLY place that handles lock/unlock transitions.
+let _lockCanvasPollInterval = null;
+
+function initLockScreenHandler() {
+  if (!IS_ELECTRON || !window.electronAPI?.onScreenLockStateChanged) return;
+
+  const handleLockEvent = async (state, bmpPath) => {
+    if (state === 'locked') {
+      // Prevent double-setup
+      if (agent.captureMode === 'gdi') {
+        console.log('[host] ⏭️  Already in GDI mode — ignoring duplicate lock event');
+        return;
+      }
+      console.log('[host] 🔒 Lock event — setting up canvas, path:', bmpPath);
+      agent.captureMode = 'gdi';
+      agent.gdiCaptureActive = true;
+
+      if (!bmpPath) {
+        console.error('[host] No BMP path in lock event');
+        agent.captureMode = 'dxgi';
+        agent.gdiCaptureActive = false;
+        return;
+      }
+
+      // Set up canvas
+      const canvas = document.createElement('canvas');
+      canvas.width = 1920; canvas.height = 1080;
+      canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+      document.body.appendChild(canvas);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 1920, 1080);
+      ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('Connecting to locked screen...', 960, 540);
+
+      const lockStream = canvas.captureStream(10);
+      agent.stream = lockStream;
+      agent.streamReady = true;
+      agent.gdiCanvas = canvas;
+
+      await new Promise(r => setTimeout(r, 300));
+
+      // Poll BMP file written by GDI process
+      let frameCount = 0;
+      _lockCanvasPollInterval = setInterval(async () => {
+        try {
+          const base64 = await window.electronAPI.getGdiCapture(bmpPath);
+          if (!base64) return;
+          const img = new Image();
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            frameCount++;
+            if (frameCount === 1) console.log('[host] ✅ First lock screen frame displayed');
+          };
+          img.src = 'data:image/bmp;base64,' + base64;
+        } catch {}
+      }, 100);
+      agent.gdiPollInterval = _lockCanvasPollInterval;
+
+      // Replace WebRTC track
+      const newTrack = lockStream.getVideoTracks()[0];
+      if (newTrack) {
+        for (const [, peer] of agent.peers.entries()) {
+          if (peer.pc) {
+            const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+            if (sender) { try { await sender.replaceTrack(newTrack); } catch {} }
+          }
+        }
+      }
+      console.log('[host] ✅ Lock screen canvas active');
+
+    } else if (state === 'normal') {
+      if (agent.captureMode === 'dxgi') {
+        console.log('[host] ⏭️  Already in DXGI mode — ignoring duplicate unlock event');
+        return;
+      }
+      console.log('[host] 🔓 Unlock event — tearing down canvas, resuming DXGI');
+
+      if (_lockCanvasPollInterval) {
+        clearInterval(_lockCanvasPollInterval);
+        _lockCanvasPollInterval = null;
+      }
+      agent.gdiPollInterval = null;
+      agent.gdiCaptureActive = false;
+      agent.captureMode = 'dxgi';
+      if (agent.gdiCanvas) {
+        agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
+        agent.gdiCanvas = null;
+      }
+      agent.stream = null;
+      agent.streamReady = false;
+
+      await agentStartStream();
+
+      if (agent.stream) {
+        const t = agent.stream.getVideoTracks()[0];
+        if (t) {
+          for (const [, peer] of agent.peers.entries()) {
+            if (peer.pc) {
+              const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+              if (s) { try { await s.replaceTrack(t); } catch {} }
+            }
+          }
+        }
+      }
+    }
+  };
+
+  window.electronAPI.onScreenLockStateChanged(handleLockEvent);
+  console.log('[host] ✅ Lock screen handler registered');
+}
+
 function agentCleanupPeer() {
   console.log('[host] 🧹 Cleaning up ALL peer connections');
   
@@ -1026,45 +1139,8 @@ async function switchToGdiCapture(reason = 'capture failure', force = false) {
       }
     }
 
-    // Renderer does NOT control unlock — main.js sends 'screen-lock-state-changed' with 'normal'
-    // when it detects 5 stable normal readings (~10 seconds after unlock)
-    // Register a one-time listener for the unlock event
-    const onUnlockFromSwitch = async (state) => {
-      if (state !== 'normal') return;
-      window.electronAPI?.offScreenLockStateChanged?.(onUnlockFromSwitch);
-      console.log('[host] 🔓 Unlock event received — stopping GDI, resuming DXGI');
-      clearInterval(pollInterval);
-      agent.gdiPollInterval = null;
-      agent.gdiCaptureActive = false;
-      agent.gdiSwitchInProgress = false;
-      agent.captureMode = 'dxgi';
-      agent.serviceFramePath = null;
-      if (agent.secureDesktopActive) {
-        agent.secureDesktopActive = false;
-      }
-      if (agent.gdiCanvas) {
-        agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
-        agent.gdiCanvas = null;
-      }
-      agent.stream = null;
-      agent.streamReady = false;
-      await agentStartStream();
-      if (agent.stream) {
-        const t = agent.stream.getVideoTracks()[0];
-        if (t) {
-          for (const [, peer] of agent.peers.entries()) {
-            if (peer.pc) {
-              const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-              if (s) { try { await s.replaceTrack(t); } catch {} }
-            }
-          }
-        }
-      }
-    };
-    if (IS_ELECTRON && window.electronAPI?.onScreenLockStateChanged) {
-      window.electronAPI.onScreenLockStateChanged(onUnlockFromSwitch);
-    }
-    agent.unlockCheckInterval = null; // main.js owns unlock detection
+    // Unlock is handled by initLockScreenHandler() at module level
+    agent.unlockCheckInterval = null;
 
     console.log('[host] ✅ GDI lock-screen capture active');
   } catch (err) {
@@ -1179,121 +1255,8 @@ async function agentStartStream() {
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
       startCaptureHealthMonitor(stream);
-      // Note: videoTrack.onended is NOT used — main.js lock monitor handles lock detection
-      // via IPC events, which is more reliable than track end events in Electron
     }
-
-    // Listen for lock screen state changes from main process
-    // Main process monitors desktopCapturer every 2s and sends IPC events
-    // Main process also starts service capture and passes the bmpPath
-    const onLockStateChanged = async (state, bmpPath) => {
-      if (state === 'locked') {
-        // Always handle lock regardless of current captureMode
-        if (agent.captureMode !== 'dxgi') {
-          console.log(`[host] ⚠️ Lock event received but captureMode=${agent.captureMode} — forcing dxgi reset`);
-        }
-        console.log('[host] 🔒 Lock screen event received — starting service canvas');
-        window.electronAPI?.offScreenLockStateChanged?.(onLockStateChanged);
-        agent.captureMode = 'gdi';
-        agent.gdiCaptureActive = true;
-        agent.__switching = true;
-        setTimeout(() => { agent.__switching = false; }, 3000);
-
-        // Service frame path provided by main.js — service captures both lock screen and password screen
-        const framePath = bmpPath;
-        if (!framePath) {
-          console.error('[host] No service frame path provided');
-          agent.captureMode = 'dxgi';
-          agent.gdiCaptureActive = false;
-          return;
-        }
-
-        console.log('[host] 🔒 Setting up canvas to display service frames from:', framePath);
-
-        const canvas = document.createElement('canvas');
-        canvas.width = 1920; canvas.height = 1080;
-        canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-        document.body.appendChild(canvas);
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 1920, 1080);
-        ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
-        ctx.fillText('Connecting to locked screen...', 960, 540);
-
-        const serviceStream = canvas.captureStream(10);
-        agent.stream = serviceStream;
-        agent.streamReady = true;
-        agent.gdiCanvas = canvas;
-
-        await new Promise(r => setTimeout(r, 300));
-
-        // Poll service frame file — service writes frames here continuously
-        // Service calls SwitchToInputDesktop() per frame, so it captures
-        // both lock screen (Default desktop) and password screen (Winlogon desktop)
-        let frameCount = 0;
-        const pollInterval = setInterval(async () => {
-          try {
-            const base64 = await window.electronAPI.getGdiCapture(framePath);
-            if (!base64) return;
-            const img = new Image();
-            img.onload = () => {
-              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-              frameCount++;
-              if (frameCount === 1) console.log('[host] ✅ First service frame displayed');
-            };
-            img.src = 'data:image/bmp;base64,' + base64;
-          } catch {}
-        }, 100);
-        agent.gdiPollInterval = pollInterval;
-
-        // Replace WebRTC track with canvas stream
-        const newTrack = serviceStream.getVideoTracks()[0];
-        if (newTrack) {
-          for (const [, peer] of agent.peers.entries()) {
-            if (peer.pc) {
-              const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-              if (sender) { try { await sender.replaceTrack(newTrack); } catch {} }
-            }
-          }
-        }
-
-        // Renderer does NOT decide when to stop — main.js sends 'normal' after 5 stable readings
-        const onUnlockEvent = async (state) => {
-          if (state !== 'normal') return;
-          window.electronAPI?.offScreenLockStateChanged?.(onUnlockEvent);
-          console.log('[host] 🔓 Unlock event — tearing down canvas, resuming DXGI');
-          clearInterval(pollInterval);
-          agent.gdiPollInterval = null;
-          agent.gdiCaptureActive = false;
-          agent.captureMode = 'dxgi';
-          agent.serviceFramePath = null;
-          agent.secureDesktopActive = false;
-          if (agent.gdiCanvas) { agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas); agent.gdiCanvas = null; }
-          agent.stream = null; agent.streamReady = false;
-          await agentStartStream();
-          if (agent.stream) {
-            const t = agent.stream.getVideoTracks()[0];
-            if (t) {
-              for (const [, peer] of agent.peers.entries()) {
-                if (peer.pc) {
-                  const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-                  if (s) { try { await s.replaceTrack(t); } catch {} }
-                }
-              }
-            }
-          }
-          // Re-register for next lock
-          window.electronAPI?.onScreenLockStateChanged?.(onLockStateChanged);
-        };
-        if (window.electronAPI?.onScreenLockStateChanged) {
-          window.electronAPI.onScreenLockStateChanged(onUnlockEvent);
-        }
-        agent.unlockCheckInterval = null;
-        console.log('[host] ✅ Service capture canvas active');
-      }
-    };
-    if (IS_ELECTRON && window.electronAPI?.onScreenLockStateChanged) {
-      window.electronAPI.onScreenLockStateChanged(onLockStateChanged);
-    }
+    // Lock screen handling is done by initLockScreenHandler() at module level
   } catch (err) {
     const msg = err.name === 'NotAllowedError'
       ? 'Screen sharing denied.'
@@ -1556,6 +1519,9 @@ async function agentInit() {
   }
   agent.initialized = true;
   agent.closed = false;
+
+  // Register lock screen handler ONCE at init — handles all lock/unlock transitions
+  initLockScreenHandler();
 
   console.log('[host] HOST PAGE MOUNTED — IS_ELECTRON:', IS_ELECTRON);
   console.log('[host] Initializing agent...');
