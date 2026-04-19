@@ -538,14 +538,31 @@ async function agentCreateOffer(viewerId) {
       // Check lock state request from viewer
       if (msg.type === 'check_lock_state') {
         console.log('[host] 🔍 check_lock_state received. gdiCaptureActive:', agent.gdiCaptureActive);
-        if (peerState.dc?.readyState === 'open') {
-          peerState.dc.send(JSON.stringify({
-            type: 'lock_state_response',
-            locked: agent.gdiCaptureActive,
-            isElectron: IS_ELECTRON,
-          }));
-          console.log('[host] 📤 Sent lock_state_response: locked=', agent.gdiCaptureActive);
-        }
+        // Also check via IPC to main.js for the authoritative lock state
+        const getLockState = async () => {
+          let locked = agent.gdiCaptureActive;
+          if (IS_ELECTRON && window.electronAPI?.getLockState) {
+            try {
+              const result = await window.electronAPI.getLockState();
+              locked = result.locked;
+              console.log('[host] 🔍 IPC lock state:', result.locked, '| gdiCaptureActive:', agent.gdiCaptureActive);
+            } catch (e) {
+              console.warn('[host] getLockState IPC failed, using gdiCaptureActive:', agent.gdiCaptureActive);
+            }
+          }
+          return locked;
+        };
+        getLockState().then(locked => {
+          if (peerState.dc?.readyState === 'open') {
+            peerState.dc.send(JSON.stringify({
+              type: 'lock_state_response',
+              locked,
+              isElectron: IS_ELECTRON,
+              gdiCaptureActive: agent.gdiCaptureActive,
+            }));
+            console.log('[host] 📤 Sent lock_state_response: locked=', locked);
+          }
+        });
       }
 
       // File transfer messages — forward to Electron main process for saving to disk
