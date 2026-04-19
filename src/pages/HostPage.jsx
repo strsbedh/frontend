@@ -1117,8 +1117,17 @@ function startCaptureHealthMonitor(stream) {
 
     const stalledMs = Date.now() - agent.captureLastFrameTime;
     if (stalledMs > 2500) {
-      console.warn(`[host] ⚠️ Capture stream appears frozen for ${stalledMs}ms - forcing GDI fallback`);
-      switchToGdiCapture('frozen DXGI capture');
+      console.warn(`[host] ⚠️ Capture stream appears frozen for ${stalledMs}ms - checking screen state before GDI fallback`);
+      // Only switch to GDI if screen is actually locked/secure desktop
+      // Don't trigger GDI for transient DXGI failures on normal desktop
+      window.electronAPI?.checkScreenState?.().then(state => {
+        if (state === 'locked' || state === 'secure-desktop') {
+          console.warn(`[host] ⚠️ Screen state: ${state} — switching to GDI`);
+          switchToGdiCapture('frozen DXGI capture');
+        } else {
+          console.log(`[host] ℹ️ Screen state: ${state} — ignoring frozen stream (transient DXGI error)`);
+        }
+      }).catch(() => switchToGdiCapture('frozen DXGI capture'));
     }
   }, 1000);
 }
