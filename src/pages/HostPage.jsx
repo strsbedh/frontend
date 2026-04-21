@@ -474,7 +474,7 @@ async function agentCreateOffer(viewerId) {
       }
 
       // Forward input events to OS
-      const INPUT_TYPES = ['mouse_move', 'mouse_click', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
+      const INPUT_TYPES = ['mouse_move', 'mouse_click', 'mouse_down', 'mouse_up', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
       if (IS_ELECTRON && INPUT_TYPES.includes(msg.type)) {
         window.electronAPI.handleControl(msg);
       }
