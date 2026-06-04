@@ -135,41 +135,41 @@ function initLockScreenHandler() {
         return;
       }
 
-      // Set up canvas — use actual screen dimensions
-      const canvas = document.createElement('canvas');
-      // Get actual screen size from the BMP or use window.screen
-      canvas.width = window.screen.width || 1920;
-      canvas.height = window.screen.height || 1080;
-      canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-      document.body.appendChild(canvas);
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('Screen Locked', canvas.width / 2, canvas.height / 2);
+// Set up canvas — use actual screen dimensions
+       const canvas = document.createElement('canvas');
+       // Get actual screen size from the frame or use window.screen
+       canvas.width = window.screen.width || 1920;
+       canvas.height = window.screen.height || 1080;
+       canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+       document.body.appendChild(canvas);
+       const ctx = canvas.getContext('2d');
+       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+       ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
+       ctx.fillText('Screen Locked', canvas.width / 2, canvas.height / 2);
 
-      const lockStream = canvas.captureStream(10);
-      agent.stream = lockStream;
-      agent.streamReady = true;
-      agent.gdiCanvas = canvas;
+       const lockStream = canvas.captureStream(10);
+       agent.stream = lockStream;
+       agent.streamReady = true;
+       agent.gdiCanvas = canvas;
 
-      await new Promise(r => setTimeout(r, 300));
+       await new Promise(r => setTimeout(r, 300));
 
-      // Poll BMP file written by GDI process
-      let frameCount = 0;
-      _lockCanvasPollInterval = setInterval(async () => {
-        try {
-          const base64 = await window.electronAPI.getGdiCapture(bmpPath);
-          if (!base64) return;
-          const img = new Image();
-          img.onload = () => {
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            frameCount++;
-            if (frameCount === 1) console.log('[host] ✅ First lock screen frame displayed');
-          };
-          img.src = 'data:image/bmp;base64,' + base64;
-        } catch {}
-      }, 100);
-      agent.gdiPollInterval = _lockCanvasPollInterval;
+       // Poll frame file written by WinlogonCaptureService
+       let frameCount = 0;
+       _lockCanvasPollInterval = setInterval(async () => {
+         try {
+           const base64 = await window.electronAPI.getGdiCapture(bmpPath);
+           if (!base64) return;
+           const img = new Image();
+           img.onload = () => {
+             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+             frameCount++;
+             if (frameCount === 1) console.log('[host] ✅ First lock screen frame displayed');
+           };
+           img.src = 'data:image/jpeg;base64,' + base64; // JPEG format now
+         } catch {}
+       }, 100);
+       agent.gdiPollInterval = _lockCanvasPollInterval;
 
       // Replace WebRTC track
       const newTrack = lockStream.getVideoTracks()[0];
@@ -474,7 +474,7 @@ async function agentCreateOffer(viewerId) {
       }
 
       // Forward input events to OS
-      const INPUT_TYPES = ['mouse_move', 'mouse_click', 'mouse_down', 'mouse_up', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
+      const INPUT_TYPES = ['mouse_move', 'mouse_click', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
       if (IS_ELECTRON && INPUT_TYPES.includes(msg.type)) {
         window.electronAPI.handleControl(msg);
       }
