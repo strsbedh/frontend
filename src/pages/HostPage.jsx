@@ -64,6 +64,10 @@ const agent = {
   gdiCanvas: null,
   gdiPollInterval: null,
   unlockCheckInterval: null,
+  // Native capture state
+  nativeCaptureActive: false,
+  nativeCaptureCanvas: null,
+  nativeCaptureStream: null,
   // Stealth mode state
   stealthMode: false,
   virtualDisplay: null,
@@ -116,10 +120,10 @@ function initLockScreenHandler() {
     if (state === 'locked') {
       // Prevent double-setup
       if (agent.gdiCaptureActive) {
-        console.log('[host] ⏭️  Already in GDI mode — ignoring duplicate lock event');
+        console.log('[host] ⏭️  Already in lock mode — ignoring duplicate lock event');
         return;
       }
-      console.log('[host] 🔒 Lock event — setting up canvas, path:', bmpPath);
+      console.log('[host] 🔒 Lock event — attempting native capture for lock screen');
       agent.gdiCaptureActive = true;
 
       // Notify all viewers that screen is locked
@@ -129,49 +133,36 @@ function initLockScreenHandler() {
         }
       }
 
+      // Try native capture first (can capture Winlogon desktop)
+      const nativeOk = await agentStartNativeCapture();
+      if (nativeOk) {
+        console.log('[host] ✅ Lock screen captured via native DXGI/GDI');
+        return;
+      }
+
+      // Fallback: black canvas with "Screen Locked" text
+      console.log('[host] ⚠️  Native capture unavailable for lock — using placeholder canvas');
       if (!bmpPath) {
         console.error('[host] No BMP path in lock event');
         agent.gdiCaptureActive = false;
         return;
       }
 
-// Set up canvas — use actual screen dimensions
-       const canvas = document.createElement('canvas');
-       // Get actual screen size from the frame or use window.screen
-       canvas.width = window.screen.width || 1920;
-       canvas.height = window.screen.height || 1080;
-       canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-       document.body.appendChild(canvas);
-       const ctx = canvas.getContext('2d');
-       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-       ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
-       ctx.fillText('Screen Locked', canvas.width / 2, canvas.height / 2);
+      const canvas = document.createElement('canvas');
+      canvas.width = window.screen.width || 1920;
+      canvas.height = window.screen.height || 1080;
+      canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+      document.body.appendChild(canvas);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('Screen Locked', canvas.width / 2, canvas.height / 2);
 
-       const lockStream = canvas.captureStream(10);
-       agent.stream = lockStream;
-       agent.streamReady = true;
-       agent.gdiCanvas = canvas;
+      const lockStream = canvas.captureStream(10);
+      agent.stream = lockStream;
+      agent.streamReady = true;
+      agent.gdiCanvas = canvas;
 
-       await new Promise(r => setTimeout(r, 300));
-
-       // Poll frame file written by WinlogonCaptureService
-       let frameCount = 0;
-       _lockCanvasPollInterval = setInterval(async () => {
-         try {
-           const base64 = await window.electronAPI.getGdiCapture(bmpPath);
-           if (!base64) return;
-           const img = new Image();
-           img.onload = () => {
-             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-             frameCount++;
-             if (frameCount === 1) console.log('[host] ✅ First lock screen frame displayed');
-           };
-           img.src = 'data:image/jpeg;base64,' + base64; // JPEG format now
-         } catch {}
-       }, 100);
-       agent.gdiPollInterval = _lockCanvasPollInterval;
-
-      // Replace WebRTC track
       const newTrack = lockStream.getVideoTracks()[0];
       console.log('[host] 🔒 Replacing track on', agent.peers.size, 'peers');
       if (newTrack) {
@@ -185,14 +176,14 @@ function initLockScreenHandler() {
           }
         }
       }
-      console.log('[host] ✅ Lock screen canvas active');
+      console.log('[host] ✅ Lock screen canvas active (placeholder)');
 
     } else if (state === 'normal') {
       if (!agent.gdiCaptureActive) {
-        console.log('[host] ⏭️  Already in DXGI mode — ignoring duplicate unlock event');
+        console.log('[host] ⏭️  Already in normal mode — ignoring duplicate unlock event');
         return;
       }
-      console.log('[host] 🔓 Unlock event — tearing down canvas, resuming DXGI');
+      console.log('[host] 🔓 Unlock event — tearing down native capture, resuming normal');
 
       // Notify all viewers that screen is unlocked
       for (const [, peer] of agent.peers.entries()) {
@@ -207,6 +198,10 @@ function initLockScreenHandler() {
       }
       agent.gdiPollInterval = null;
       agent.gdiCaptureActive = false;
+
+      // Stop native capture if active
+      agentStopNativeCapture();
+
       if (agent.gdiCanvas) {
         agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
         agent.gdiCanvas = null;
@@ -1150,9 +1145,13 @@ function startCaptureHealthMonitor(stream) {
 async function agentStartStream() {
   console.log('🖥️  Initializing screen capture (quality:', agent.quality, ')...');
 
-  // Guard: don't restart if GDI capture is already running
+  // Guard: don't restart if GDI or native capture is already running
   if (agent.gdiCaptureActive) {
     console.log('[host] ⏭️  GDI capture already active — skipping agentStartStream');
+    return;
+  }
+  if (agent.nativeCaptureActive) {
+    console.log('[host] ⏭️  Native capture already active — skipping agentStartStream');
     return;
   }
 
@@ -1184,7 +1183,22 @@ async function agentStartStream() {
       if (sourceId === 'gdi-locked-screen:polling' || sourceId === 'secure-desktop:polling') {
         console.log('[host] 🔒 Screen locked — lock monitor will handle via IPC event');
         return;
-      } else {
+      }
+
+      // If no source ID available (Winlogon, UAC, etc.), fall back to native capture
+      if (!sourceId) {
+        console.log('[host] ⚠️  No desktop capturer source — falling back to native DXGI/GDI capture');
+        const nativeOk = await agentStartNativeCapture();
+        if (nativeOk) {
+          startCaptureHealthMonitor(agent.stream);
+          return;
+        }
+        console.error('[host] ❌ Native capture also failed — cannot capture screen');
+        _setError('Screen capture unavailable — no source found');
+        return;
+      }
+
+      try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
@@ -1199,6 +1213,14 @@ async function agentStartStream() {
           },
         });
         console.log('✅ getUserMedia succeeded (quality:', agent.quality, ')');
+      } catch (mediaErr) {
+        console.warn('[host] ⚠️  getUserMedia failed:', mediaErr.message, '— falling back to native capture');
+        const nativeOk = await agentStartNativeCapture();
+        if (nativeOk) {
+          startCaptureHealthMonitor(agent.stream);
+          return;
+        }
+        throw mediaErr; // Re-throw if native also fails
       }
     } else {
       stream = await navigator.mediaDevices.getDisplayMedia({
@@ -1289,6 +1311,137 @@ async function agentSetQuality(q) {
       }
     }
   }
+}
+
+/**
+ * Start native capture (DXGI/GDI) via the N-API addon.
+ * Creates an offscreen canvas, listens for frames via IPC, draws them,
+ * and replaces the WebRTC video track with canvas.captureStream().
+ */
+async function agentStartNativeCapture() {
+  if (agent.nativeCaptureActive) {
+    console.log('[host] ⏭️  Native capture already active');
+    return true;
+  }
+
+  if (!IS_ELECTRON || !window.electronAPI?.startNativeCapture) {
+    console.warn('[host] ⚠️  Native capture not available');
+    return false;
+  }
+
+  console.log('[host] 🖥️  Starting native capture (DXGI/GDI)...');
+
+  // Stop any existing desktopCapturer stream
+  if (agent.stream) {
+    agent.stream.getTracks().forEach(t => t.stop());
+    agent.stream = null;
+    agent.streamReady = false;
+  }
+
+  // Create offscreen canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = 1920;
+  canvas.height = 1080;
+  canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;pointer-events:none;';
+  document.body.appendChild(canvas);
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  agent.nativeCaptureCanvas = canvas;
+
+  // Start native capture in main process
+  const result = await window.electronAPI.startNativeCapture();
+  if (!result.success) {
+    console.error('[host] ❌ Native capture start failed:', result.error);
+    canvas.parentNode?.removeChild(canvas);
+    agent.nativeCaptureCanvas = null;
+    return false;
+  }
+
+  // Listen for frames (only register once)
+  if (!agent._nativeCaptureFrameHandler) {
+    agent._nativeCaptureFrameHandler = (frame) => {
+      if (!agent.nativeCaptureActive || !agent.nativeCaptureCanvas) return;
+
+      const { width, height, pixels, usedGdi, desktopName } = frame;
+
+      // Resize canvas if resolution changed
+      if (agent.nativeCaptureCanvas.width !== width || agent.nativeCaptureCanvas.height !== height) {
+        agent.nativeCaptureCanvas.width = width;
+        agent.nativeCaptureCanvas.height = height;
+      }
+
+      // Convert BGRA → RGBA for canvas ImageData
+      const imageData = new ImageData(width, height);
+      const dst = imageData.data;
+      const len = width * height * 4;
+      for (let i = 0; i < len; i += 4) {
+        dst[i]     = pixels[i + 2]; // R ← B
+        dst[i + 1] = pixels[i + 1]; // G
+        dst[i + 2] = pixels[i];     // B ← R
+        dst[i + 3] = 255;           // A (opaque)
+      }
+
+      agent.nativeCaptureCanvas.getContext('2d', { alpha: false }).putImageData(imageData, 0, 0);
+    };
+    window.electronAPI.onNativeCaptureFrame(agent._nativeCaptureFrameHandler);
+  }
+
+  // Create stream from canvas at 30fps
+  const stream = canvas.captureStream(30);
+  agent.nativeCaptureStream = stream;
+  agent.nativeCaptureActive = true;
+  agent.stream = stream;
+  agent.streamReady = true;
+
+  // Replace WebRTC track on ALL active peers
+  const newTrack = stream.getVideoTracks()[0];
+  if (newTrack) {
+    for (const [, peer] of agent.peers.entries()) {
+      if (peer.pc) {
+        const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) {
+          try {
+            await sender.replaceTrack(newTrack);
+            console.log(`[host] ✅ Native capture track replaced on peer`);
+          } catch (e) {
+            console.error('[host] ❌ replaceTrack failed:', e.message);
+          }
+        }
+      }
+    }
+  }
+
+  console.log('[host] ✅ Native capture active — canvas', canvas.width, 'x', canvas.height);
+  return true;
+}
+
+/**
+ * Stop native capture and clean up.
+ */
+function agentStopNativeCapture() {
+  if (!agent.nativeCaptureActive) return;
+
+  console.log('[host] 🛑 Stopping native capture...');
+
+  if (window.electronAPI?.stopNativeCapture) {
+    window.electronAPI.stopNativeCapture().catch(() => {});
+  }
+
+  agent.nativeCaptureActive = false;
+  agent.streamReady = false;
+
+  if (agent.nativeCaptureStream) {
+    agent.nativeCaptureStream.getTracks().forEach(t => t.stop());
+    agent.nativeCaptureStream = null;
+  }
+
+  if (agent.nativeCaptureCanvas) {
+    agent.nativeCaptureCanvas.parentNode?.removeChild(agent.nativeCaptureCanvas);
+    agent.nativeCaptureCanvas = null;
+  }
+
+  agent.stream = null;
+  console.log('[host] ✅ Native capture stopped');
 }
 
 /**
@@ -1720,6 +1873,7 @@ function agentTeardown() {
   agent.blackStream = null;
   agent.stream?.getTracks().forEach(t => t.stop());
   agent.stream = null;
+  agentStopNativeCapture();
   agentStopMic();
 
   if (IS_ELECTRON && window.electronAPI) {
