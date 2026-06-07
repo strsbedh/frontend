@@ -109,6 +109,45 @@ function shouldIgnoreDisconnect() {
 // This is the ONLY place that handles lock/unlock transitions.
 let _lockCanvasPollInterval = null;
 
+// Helper: show a "Screen Locked" placeholder canvas and replace WebRTC track
+function _showPlaceholderCanvas() {
+  console.log('[host] Showing placeholder canvas for locked screen');
+  if (agent.gdiCanvas) {
+    agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
+    agent.gdiCanvas = null;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = window.screen.width || 1920;
+  canvas.height = window.screen.height || 1080;
+  canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;pointer-events:none;';
+  document.body.appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 48px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('Screen Locked', canvas.width / 2, canvas.height / 2);
+  ctx.font = '24px sans-serif'; ctx.fillStyle = '#aaaaaa';
+  ctx.fillText('Waiting for unlock...', canvas.width / 2, canvas.height / 2 + 60);
+
+  const lockStream = canvas.captureStream(5);
+  agent.stream = lockStream;
+  agent.streamReady = true;
+  agent.gdiCanvas = canvas;
+
+  const newTrack = lockStream.getVideoTracks()[0];
+  if (newTrack) {
+    for (const [, peer] of agent.peers.entries()) {
+      if (peer.pc) {
+        const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) {
+          try { sender.replaceTrack(newTrack); } catch (e) { console.error('[host] replaceTrack failed:', e.message); }
+        }
+      }
+    }
+  }
+  console.log('[host] Placeholder canvas active on', agent.peers.size, 'peers');
+}
+
 function initLockScreenHandler() {
   if (!IS_ELECTRON || !window.electronAPI?.onScreenLockStateChanged) {
     console.log('[host] ⚠️ initLockScreenHandler: IS_ELECTRON=', IS_ELECTRON, 'onScreenLockStateChanged=', !!window.electronAPI?.onScreenLockStateChanged);
@@ -116,14 +155,14 @@ function initLockScreenHandler() {
   }
 
   const handleLockEvent = async (state, bmpPath) => {
-    console.log('[host] 🔔 Lock event received:', state, 'bmpPath:', bmpPath);
+    console.log('[host] Lock event received:', state);
     if (state === 'locked') {
       // Prevent double-setup
       if (agent.gdiCaptureActive) {
-        console.log('[host] ⏭️  Already in lock mode — ignoring duplicate lock event');
+        console.log('[host] Already in lock mode — ignoring');
         return;
       }
-      console.log('[host] 🔒 Lock event — attempting native capture for lock screen');
+      console.log('[host] Lock event — starting native capture for lock screen');
       agent.gdiCaptureActive = true;
 
       // Notify all viewers that screen is locked
@@ -133,57 +172,42 @@ function initLockScreenHandler() {
         }
       }
 
-      // Try native capture first (can capture Winlogon desktop)
+      // Try native capture first (can capture Winlogon desktop via GDI)
       const nativeOk = await agentStartNativeCapture();
       if (nativeOk) {
-        console.log('[host] ✅ Lock screen captured via native DXGI/GDI');
-        return;
-      }
-
-      // Fallback: black canvas with "Screen Locked" text
-      console.log('[host] ⚠️  Native capture unavailable for lock — using placeholder canvas');
-      if (!bmpPath) {
-        console.error('[host] No BMP path in lock event');
-        agent.gdiCaptureActive = false;
-        return;
-      }
-
-      const canvas = document.createElement('canvas');
-      canvas.width = window.screen.width || 1920;
-      canvas.height = window.screen.height || 1080;
-      canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-      document.body.appendChild(canvas);
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#fff'; ctx.font = '32px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('Screen Locked', canvas.width / 2, canvas.height / 2);
-
-      const lockStream = canvas.captureStream(10);
-      agent.stream = lockStream;
-      agent.streamReady = true;
-      agent.gdiCanvas = canvas;
-
-      const newTrack = lockStream.getVideoTracks()[0];
-      console.log('[host] 🔒 Replacing track on', agent.peers.size, 'peers');
-      if (newTrack) {
-        for (const [, peer] of agent.peers.entries()) {
-          if (peer.pc) {
-            const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-            if (sender) {
-              try { await sender.replaceTrack(newTrack); console.log('[host] ✅ Track replaced'); }
-              catch (e) { console.error('[host] replaceTrack failed:', e.message); }
-            }
+        console.log('[host] Lock screen captured via native capture');
+        // Set a safety timeout: if no frames arrive in 3s, fall back to placeholder
+        const safetyTimer = setTimeout(() => {
+          if (agent.gdiCaptureActive && !agent._lockFrameReceived) {
+            console.log('[host] No native frames after 3s — falling back to placeholder');
+            agentStopNativeCapture();
+            _showPlaceholderCanvas();
           }
+        }, 3000);
+        // Track first frame arrival
+        agent._lockFrameReceived = false;
+        const origHandler = agent._nativeCaptureFrameHandler;
+        if (origHandler) {
+          agent._nativeCaptureFrameHandler = (frame) => {
+            agent._lockFrameReceived = true;
+            clearTimeout(safetyTimer);
+            // Restore normal handler
+            agent._nativeCaptureFrameHandler = origHandler;
+            origHandler(frame);
+          };
         }
+        return;
       }
-      console.log('[host] ✅ Lock screen canvas active (placeholder)');
+
+      // Native capture failed — show placeholder immediately
+      _showPlaceholderCanvas();
 
     } else if (state === 'normal') {
       if (!agent.gdiCaptureActive) {
-        console.log('[host] ⏭️  Already in normal mode — ignoring duplicate unlock event');
+        console.log('[host] Already in normal mode — ignoring');
         return;
       }
-      console.log('[host] 🔓 Unlock event — tearing down native capture, resuming normal');
+      console.log('[host] Unlock event — tearing down capture, resuming normal');
 
       // Notify all viewers that screen is unlocked
       for (const [, peer] of agent.peers.entries()) {
@@ -198,6 +222,7 @@ function initLockScreenHandler() {
       }
       agent.gdiPollInterval = null;
       agent.gdiCaptureActive = false;
+      agent._lockFrameReceived = false;
 
       // Stop native capture if active
       agentStopNativeCapture();
