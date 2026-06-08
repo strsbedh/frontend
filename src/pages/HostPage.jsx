@@ -109,43 +109,9 @@ function shouldIgnoreDisconnect() {
 // This is the ONLY place that handles lock/unlock transitions.
 let _lockCanvasPollInterval = null;
 
-// Helper: show a "Screen Locked" placeholder canvas and replace WebRTC track
+// Safety net — should never be reached since backstage capture handles locked screen
 function _showPlaceholderCanvas() {
-  console.log('[host] Showing placeholder canvas for locked screen');
-  if (agent.gdiCanvas) {
-    agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
-    agent.gdiCanvas = null;
-  }
-
-  const canvas = document.createElement('canvas');
-  canvas.width = window.screen.width || 1920;
-  canvas.height = window.screen.height || 1080;
-  canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;pointer-events:none;';
-  document.body.appendChild(canvas);
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 48px sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText('Screen Locked', canvas.width / 2, canvas.height / 2);
-  ctx.font = '24px sans-serif'; ctx.fillStyle = '#aaaaaa';
-  ctx.fillText('Waiting for unlock...', canvas.width / 2, canvas.height / 2 + 60);
-
-  const lockStream = canvas.captureStream(5);
-  agent.stream = lockStream;
-  agent.streamReady = true;
-  agent.gdiCanvas = canvas;
-
-  const newTrack = lockStream.getVideoTracks()[0];
-  if (newTrack) {
-    for (const [, peer] of agent.peers.entries()) {
-      if (peer.pc) {
-        const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-        if (sender) {
-          try { sender.replaceTrack(newTrack); } catch (e) { console.error('[host] replaceTrack failed:', e.message); }
-        }
-      }
-    }
-  }
-  console.log('[host] Placeholder canvas active on', agent.peers.size, 'peers');
+  console.warn('[host] _showPlaceholderCanvas called — this should not happen with backstage capture active');
 }
 
 function initLockScreenHandler() {
@@ -1408,7 +1374,9 @@ async function agentStartNativeCapture() {
 
       agent.nativeCaptureCanvas.getContext('2d', { alpha: false }).putImageData(imageData, 0, 0);
     };
-    window.electronAPI.onNativeCaptureFrame(agent._nativeCaptureFrameHandler);
+    window.electronAPI.onNativeCaptureFrame((frame) => {
+      if (agent._nativeCaptureFrameHandler) agent._nativeCaptureFrameHandler(frame);
+    });
   }
 
   // Create stream from canvas at 30fps
