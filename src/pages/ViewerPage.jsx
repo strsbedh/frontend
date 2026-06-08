@@ -1117,40 +1117,6 @@ export default function ViewerPage() {
                 </div>
               )}
 
-              {/* Screen locked overlay */}
-              {isScreenLocked && (
-                <div className="absolute inset-0 bg-zinc-900/95 flex flex-col items-center justify-center gap-4 z-10">
-                  <div className="text-center">
-                    <div className="text-4xl mb-3">🔒</div>
-                    <p className="text-white text-lg font-semibold mb-1">Screen Locked</p>
-                    <p className="text-zinc-400 text-sm">Enter the Windows password to unlock remotely</p>
-                  </div>
-                  <div className="flex flex-col gap-3 w-72">
-                    <input
-                      type="password"
-                      value={unlockPassword}
-                      onChange={e => { setUnlockPassword(e.target.value); setUnlockStatus(''); }}
-                      onKeyDown={e => { if (e.key === 'Enter') sendUnlockRequest(); }}
-                      placeholder="Windows password"
-                      className="w-full px-4 py-2.5 bg-zinc-800 border border-zinc-600 text-white placeholder-zinc-500 rounded focus:outline-none focus:border-blue-500 text-sm"
-                      autoFocus
-                    />
-                    {unlockStatus === 'error' && (
-                      <p className="text-red-400 text-xs text-center">❌ Incorrect password. Try again.</p>
-                    )}
-                    {unlockStatus === 'success' && (
-                      <p className="text-green-400 text-xs text-center">✅ Unlocking...</p>
-                    )}
-                    <button
-                      onClick={sendUnlockRequest}
-                      disabled={!unlockPassword || unlockStatus === 'sending'}
-                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded text-sm font-medium transition-colors"
-                    >
-                      {unlockStatus === 'sending' ? 'Unlocking...' : 'Unlock Screen'}
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* Status bar */}
