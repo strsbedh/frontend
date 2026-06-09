@@ -120,8 +120,7 @@ function initLockScreenHandler() {
         console.log('[host] Already in lock mode — ignoring');
         return;
       }
-      console.log('[host] Lock event — starting native capture for lock screen');
-      agent.gdiCaptureActive = true;
+      console.log('[host] Lock event — starting desktop capture for lock screen');
 
       // Notify all viewers that screen is locked
       for (const [, peer] of agent.peers.entries()) {
@@ -130,13 +129,24 @@ function initLockScreenHandler() {
         }
       }
 
-      // Start native capture (DXGI when unlocked, backstage relay when locked)
-      // Backstage frames arrive via native-capture-frame IPC — no safety timer needed,
-      // the pipe connects and delivers frames reliably within milliseconds.
-      const nativeOk = await agentStartNativeCapture();
-      if (!nativeOk) {
-        console.error('[host] Native capture failed on lock');
+      // Try desktopCapturer first (getUserMedia via Electron) — DXGI captures the composited
+      // desktop which includes the lock screen content. If it fails (e.g. on secure desktop),
+      // agentStartStream falls back to native capture → backstage service for Winlogon.
+      await agentStartStream();
+
+      // Replace WebRTC track with the capture stream (getUserMedia or native fallback)
+      if (agent.stream) {
+        const t = agent.stream.getVideoTracks()[0];
+        if (t) {
+          for (const [, peer] of agent.peers.entries()) {
+            if (peer.pc) {
+              const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+              if (s) { try { await s.replaceTrack(t); } catch {} }
+            }
+          }
+        }
       }
+      agent.gdiCaptureActive = true;
 
     } else if (state === 'normal') {
       if (!agent.gdiCaptureActive) {
@@ -163,7 +173,12 @@ function initLockScreenHandler() {
         agent.gdiCanvas = null;
       }
       agent.gdiPollInterval = null;
-      agent.stream = null;
+
+      // Stop any previous desktop capture stream before restarting
+      if (agent.stream) {
+        agent.stream.getTracks().forEach(t => t.stop());
+        agent.stream = null;
+      }
       agent.streamReady = false;
 
       // Restart normal desktop capture
