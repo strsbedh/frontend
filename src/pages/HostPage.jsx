@@ -120,7 +120,7 @@ function initLockScreenHandler() {
         console.log('[host] Already in lock mode — ignoring');
         return;
       }
-      console.log('[host] Lock event — starting desktop capture for lock screen');
+      console.log('[host] Lock event — starting native capture for Winlogon desktop');
 
       // Notify all viewers that screen is locked
       for (const [, peer] of agent.peers.entries()) {
@@ -129,26 +129,14 @@ function initLockScreenHandler() {
         }
       }
 
-      // Try desktopCapturer first — captures the default desktop where the lock screen
-      // (clock/wallpaper) is displayed. If it fails (secure desktop, no source), fall
-      // back to backstage service which captures the Winlogon desktop (password prompt).
-      await agentStartStream();
-
-      // If desktopCapturer succeeded, agent.stream holds the getUserMedia stream.
-      // If it fell back to native capture, agent.nativeCaptureActive is now true
-      // and agent.stream holds the canvas stream.
-      if (agent.stream && !agent.nativeCaptureActive) {
-        // desktopCapturer path — replace WebRTC track with the new stream
-        const t = agent.stream.getVideoTracks()[0];
-        if (t) {
-          for (const [, peer] of agent.peers.entries()) {
-            if (peer.pc) {
-              const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-              if (s) { try { await s.replaceTrack(t); } catch {} }
-            }
-          }
-        }
-      }
+      // ALWAYS use native capture (backstage service) when locked.
+      // desktopCapturer captures the default desktop but NOT the Winlogon
+      // password prompt. The backstage service captures Winlogon directly,
+      // showing both the lock screen AND the password prompt on click.
+      // main.js lock monitor starts the backstage capture service and sends
+      // frames via 'native-capture-frame' IPC. We just need to set up the
+      // canvas rendering pipeline.
+      await agentStartNativeCapture();
       agent.gdiCaptureActive = true;
 
     } else if (state === 'normal') {
