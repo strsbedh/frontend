@@ -129,13 +129,25 @@ function initLockScreenHandler() {
         }
       }
 
-      // Start native capture directly — the backstage service captures Winlogon frames
-      // reliably via GDI at SYSTEM level. The safety timer was removed — backstage frames
-      // arrive as soon as the pipe connects, no destructive 3s timeout.
-      const nativeOk = await agentStartNativeCapture();
-      if (!nativeOk) {
-        console.error('[host] Native capture failed on lock — trying desktopCapturer');
-        await agentStartStream();
+      // Try desktopCapturer first — captures the default desktop where the lock screen
+      // (clock/wallpaper) is displayed. If it fails (secure desktop, no source), fall
+      // back to backstage service which captures the Winlogon desktop (password prompt).
+      await agentStartStream();
+
+      // If desktopCapturer succeeded, agent.stream holds the getUserMedia stream.
+      // If it fell back to native capture, agent.nativeCaptureActive is now true
+      // and agent.stream holds the canvas stream.
+      if (agent.stream && !agent.nativeCaptureActive) {
+        // desktopCapturer path — replace WebRTC track with the new stream
+        const t = agent.stream.getVideoTracks()[0];
+        if (t) {
+          for (const [, peer] of agent.peers.entries()) {
+            if (peer.pc) {
+              const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+              if (s) { try { await s.replaceTrack(t); } catch {} }
+            }
+          }
+        }
       }
       agent.gdiCaptureActive = true;
 
