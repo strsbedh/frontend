@@ -129,22 +129,13 @@ function initLockScreenHandler() {
         }
       }
 
-      // Try desktopCapturer first (getUserMedia via Electron) — DXGI captures the composited
-      // desktop which includes the lock screen content. If it fails (e.g. on secure desktop),
-      // agentStartStream falls back to native capture → backstage service for Winlogon.
-      await agentStartStream();
-
-      // Replace WebRTC track with the capture stream (getUserMedia or native fallback)
-      if (agent.stream) {
-        const t = agent.stream.getVideoTracks()[0];
-        if (t) {
-          for (const [, peer] of agent.peers.entries()) {
-            if (peer.pc) {
-              const s = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-              if (s) { try { await s.replaceTrack(t); } catch {} }
-            }
-          }
-        }
+      // Start native capture directly — the backstage service captures Winlogon frames
+      // reliably via GDI at SYSTEM level. The safety timer was removed — backstage frames
+      // arrive as soon as the pipe connects, no destructive 3s timeout.
+      const nativeOk = await agentStartNativeCapture();
+      if (!nativeOk) {
+        console.error('[host] Native capture failed on lock — trying desktopCapturer');
+        await agentStartStream();
       }
       agent.gdiCaptureActive = true;
 
