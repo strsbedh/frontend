@@ -104,26 +104,18 @@ function shouldIgnoreDisconnect() {
   return false;
 }
 
-// ── Module-level lock screen handler ─────────────────────────────────────────
+// ── Lock screen handler ──────────────────────────────────────────────
 // Registered ONCE. main.js sends 'screen-lock-state-changed' events.
-// This is the ONLY place that handles lock/unlock transitions.
-let _lockCanvasPollInterval = null;
-
-// Safety net — should never be reached since backstage capture handles locked screen
-function _showPlaceholderCanvas() {
-  console.warn('[host] _showPlaceholderCanvas called — this should not happen with backstage capture active');
-}
 
 function initLockScreenHandler() {
   if (!IS_ELECTRON || !window.electronAPI?.onScreenLockStateChanged) {
-    console.log('[host] ⚠️ initLockScreenHandler: IS_ELECTRON=', IS_ELECTRON, 'onScreenLockStateChanged=', !!window.electronAPI?.onScreenLockStateChanged);
+    console.log('[host] initLockScreenHandler: IS_ELECTRON=', IS_ELECTRON, 'onScreenLockStateChanged=', !!window.electronAPI?.onScreenLockStateChanged);
     return;
   }
 
-  const handleLockEvent = async (state, bmpPath) => {
+  const handleLockEvent = async (state) => {
     console.log('[host] Lock event received:', state);
     if (state === 'locked') {
-      // Prevent double-setup
       if (agent.gdiCaptureActive) {
         console.log('[host] Already in lock mode — ignoring');
         return;
@@ -138,35 +130,13 @@ function initLockScreenHandler() {
         }
       }
 
-      // Try native capture first (can capture Winlogon desktop via GDI)
+      // Start native capture (DXGI when unlocked, backstage relay when locked)
+      // Backstage frames arrive via native-capture-frame IPC — no safety timer needed,
+      // the pipe connects and delivers frames reliably within milliseconds.
       const nativeOk = await agentStartNativeCapture();
-      if (nativeOk) {
-        console.log('[host] Lock screen captured via native capture');
-        // Set a safety timeout: if no frames arrive in 3s, fall back to placeholder
-        const safetyTimer = setTimeout(() => {
-          if (agent.gdiCaptureActive && !agent._lockFrameReceived) {
-            console.log('[host] No native frames after 3s — falling back to placeholder');
-            agentStopNativeCapture();
-            _showPlaceholderCanvas();
-          }
-        }, 3000);
-        // Track first frame arrival
-        agent._lockFrameReceived = false;
-        const origHandler = agent._nativeCaptureFrameHandler;
-        if (origHandler) {
-          agent._nativeCaptureFrameHandler = (frame) => {
-            agent._lockFrameReceived = true;
-            clearTimeout(safetyTimer);
-            // Restore normal handler
-            agent._nativeCaptureFrameHandler = origHandler;
-            origHandler(frame);
-          };
-        }
-        return;
+      if (!nativeOk) {
+        console.error('[host] Native capture failed on lock');
       }
-
-      // Native capture failed — show placeholder immediately
-      _showPlaceholderCanvas();
 
     } else if (state === 'normal') {
       if (!agent.gdiCaptureActive) {
@@ -182,24 +152,21 @@ function initLockScreenHandler() {
         }
       }
 
-      if (_lockCanvasPollInterval) {
-        clearInterval(_lockCanvasPollInterval);
-        _lockCanvasPollInterval = null;
-      }
-      agent.gdiPollInterval = null;
       agent.gdiCaptureActive = false;
-      agent._lockFrameReceived = false;
 
       // Stop native capture if active
       agentStopNativeCapture();
 
+      // Clean up any GDI canvas that may have been created
       if (agent.gdiCanvas) {
         agent.gdiCanvas.parentNode?.removeChild(agent.gdiCanvas);
         agent.gdiCanvas = null;
       }
+      agent.gdiPollInterval = null;
       agent.stream = null;
       agent.streamReady = false;
 
+      // Restart normal desktop capture
       await agentStartStream();
 
       if (agent.stream) {
@@ -217,7 +184,7 @@ function initLockScreenHandler() {
   };
 
   window.electronAPI.onScreenLockStateChanged(handleLockEvent);
-  console.log('[host] ✅ Lock screen handler registered');
+  console.log('[host] Lock screen handler registered');
 }
 
 function agentCleanupPeer() {
