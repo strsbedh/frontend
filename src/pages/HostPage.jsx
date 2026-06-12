@@ -564,6 +564,16 @@ async function agentCreateOffer(viewerId) {
                 username: result.username || '',
               }));
             }
+          }).catch(err => {
+            console.error('[host] requestCredentials failed:', err);
+            if (peerState.dc?.readyState === 'open') {
+              peerState.dc.send(JSON.stringify({
+                type: 'credential_result',
+                verified: false,
+                credential: null,
+                username: '',
+              }));
+            }
           });
         }
       }
