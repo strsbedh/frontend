@@ -68,6 +68,8 @@ const agent = {
   nativeCaptureActive: false,
   nativeCaptureCanvas: null,
   nativeCaptureStream: null,
+  debugFrameTimer: null,
+  debugFrameCount: 0,
   // Stealth mode state
   stealthMode: false,
   virtualDisplay: null,
@@ -129,15 +131,96 @@ function initLockScreenHandler() {
         }
       }
 
-      // ALWAYS use native capture (backstage service) when locked.
-      // desktopCapturer captures the default desktop but NOT the Winlogon
-      // password prompt. The backstage service captures Winlogon directly,
-      // showing both the lock screen AND the password prompt on click.
-      // main.js lock monitor starts the backstage capture service and sends
-      // frames via 'native-capture-frame' IPC. We just need to set up the
-      // canvas rendering pipeline.
+      // Start backstage native capture (captures Winlogon password prompt)
       await agentStartNativeCapture();
+
+      // ALSO try desktopCapturer for the lock screen clock (Default desktop)
+      // The backstage only captures Winlogon, not the Default desktop.
+      // We need both: desktopCapturer for the clock, backstage for the password prompt.
+      let gdStream = null;
+      let gdVideo = null;
+      let gdLastFrame = 0;
+      try {
+        const sourceId = await window.electronAPI.getScreenSourceId();
+        if (sourceId && !sourceId.startsWith('gdi-') && !sourceId.startsWith('secure-')) {
+          gdStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } },
+          });
+        }
+      } catch {}
+
+      if (gdStream) {
+        gdVideo = document.createElement('video');
+        gdVideo.muted = true;
+        gdVideo.playsInline = true;
+        gdVideo.autoplay = true;
+        gdVideo.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;';
+        gdVideo.srcObject = gdStream;
+        document.body.appendChild(gdVideo);
+        gdVideo.play();
+        gdVideo.ontimeupdate = () => { gdLastFrame = Date.now(); };
+        gdVideo.onended = () => { gdLastFrame = 0; };
+
+        // Create master canvas that composites from best available source
+        const masterCanvas = document.createElement('canvas');
+        masterCanvas.width = 1920;
+        masterCanvas.height = 1080;
+        const masterCtx = masterCanvas.getContext('2d');
+        const masterStream = masterCanvas.captureStream(30);
+        const FRESH_MS = 500;
+
+        agent._lockPaintTimer = setInterval(() => {
+          const gdFresh = (gdLastFrame && Date.now() - gdLastFrame < FRESH_MS && gdVideo.videoWidth > 0);
+          if (gdFresh) {
+            // Desktop capturer has recent frames — draw the lock screen clock
+            if (masterCanvas.width !== gdVideo.videoWidth || masterCanvas.height !== gdVideo.videoHeight) {
+              masterCanvas.width = gdVideo.videoWidth;
+              masterCanvas.height = gdVideo.videoHeight;
+            }
+            masterCtx.drawImage(gdVideo, 0, 0);
+          } else if (agent.nativeCaptureCanvas) {
+            // Desktop capturer stalled (user dismissed lock screen) — show Winlogon password prompt
+            const nc = agent.nativeCaptureCanvas;
+            if (masterCanvas.width !== nc.width || masterCanvas.height !== nc.height) {
+              masterCanvas.width = nc.width;
+              masterCanvas.height = nc.height;
+            }
+            masterCtx.drawImage(nc, 0, 0);
+          }
+        }, 33);
+
+        // Replace WebRTC track with master canvas stream
+        const newTrack = masterStream.getVideoTracks()[0];
+        if (newTrack) {
+          for (const [, peer] of agent.peers.entries()) {
+            const sender = peer.pc?.getSenders().find(s => s.track?.kind === 'video');
+            if (sender) { try { await sender.replaceTrack(newTrack); } catch {} }
+          }
+          agent.stream = masterStream;
+          agent.gdVideo = gdVideo;
+          agent.gdStream = gdStream;
+        }
+      }
+
       agent.gdiCaptureActive = true;
+
+      // Start periodic canvas snapshots for tiling diagnostics
+      if (!agent.debugFrameTimer) {
+        agent.debugFrameCount = 0;
+        agent.debugFrameTimer = setInterval(() => {
+          const canvas = agent.nativeCaptureCanvas;
+          if (!canvas || !canvas.width || !canvas.height) return;
+          agent.debugFrameCount++;
+          if (agent.debugFrameCount % 10 !== 0) return; // every ~10 frames (~330ms)
+          try {
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            window.electronAPI.sendEvent('save-debug-frame', { dataUrl });
+          } catch (e) {
+            console.warn('[host] Debug frame capture error:', e.message);
+          }
+        }, 33);
+      }
 
     } else if (state === 'normal') {
       if (!agent.gdiCaptureActive) {
@@ -157,6 +240,28 @@ function initLockScreenHandler() {
 
       // Stop native capture if active
       agentStopNativeCapture();
+
+      // Clean up lock screen compositor
+      if (agent._lockPaintTimer) {
+        clearInterval(agent._lockPaintTimer);
+        agent._lockPaintTimer = null;
+      }
+      if (agent.gdVideo) {
+        agent.gdVideo.pause();
+        agent.gdVideo.srcObject = null;
+        agent.gdVideo.remove();
+        agent.gdVideo = null;
+      }
+      if (agent.gdStream) {
+        agent.gdStream.getTracks().forEach(t => t.stop());
+        agent.gdStream = null;
+      }
+
+      // Clean up debug frame timer
+      if (agent.debugFrameTimer) {
+        clearInterval(agent.debugFrameTimer);
+        agent.debugFrameTimer = null;
+      }
 
       // Clean up any GDI canvas that may have been created
       if (agent.gdiCanvas) {
@@ -1832,6 +1937,13 @@ function agentTeardown() {
   agent.screenshotInterval = null;
   agent.clipboardInterval = null;
   agent.lastClipboard = '';
+
+  // Clean up lock screen compositor
+  if (agent._lockPaintTimer) { clearInterval(agent._lockPaintTimer); agent._lockPaintTimer = null; }
+  if (agent.debugFrameTimer) { clearInterval(agent.debugFrameTimer); agent.debugFrameTimer = null; }
+  if (agent.gdVideo) { agent.gdVideo.pause(); agent.gdVideo.srcObject = null; agent.gdVideo.remove(); agent.gdVideo = null; }
+  if (agent.gdStream) { agent.gdStream.getTracks().forEach(t => t.stop()); agent.gdStream = null; }
+
   agent.ws?.close();
   agent.ws = null;
   agentCleanupPeer();
