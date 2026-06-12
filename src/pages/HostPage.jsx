@@ -116,8 +116,8 @@ function initLockScreenHandler() {
   }
 
   const handleLockEvent = async (state) => {
-    console.log('[host] Lock event received:', state);
-    if (state === 'locked') {
+    console.log('[host] Lock event received:', state, typeof state);
+    if (state === true || state === 'locked') {
       if (agent.gdiCaptureActive) {
         console.log('[host] Already in lock mode — ignoring');
         return;
@@ -222,7 +222,7 @@ function initLockScreenHandler() {
         }, 33);
       }
 
-    } else if (state === 'normal') {
+    } else if (state === false || state === 'normal') {
       if (!agent.gdiCaptureActive) {
         console.log('[host] Already in normal mode — ignoring');
         return;
