@@ -205,22 +205,7 @@ function initLockScreenHandler() {
 
       agent.gdiCaptureActive = true;
 
-      // Start periodic canvas snapshots for tiling diagnostics
-      if (!agent.debugFrameTimer) {
-        agent.debugFrameCount = 0;
-        agent.debugFrameTimer = setInterval(() => {
-          const canvas = agent.nativeCaptureCanvas;
-          if (!canvas || !canvas.width || !canvas.height) return;
-          agent.debugFrameCount++;
-          if (agent.debugFrameCount % 10 !== 0) return; // every ~10 frames (~330ms)
-          try {
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-            window.electronAPI.sendEvent('save-debug-frame', { dataUrl });
-          } catch (e) {
-            console.warn('[host] Debug frame capture error:', e.message);
-          }
-        }, 33);
-      }
+      // (debug frame timer removed — was consuming CPU on every frame)
 
     } else if (state === false || state === 'normal') {
       if (!agent.gdiCaptureActive) {
@@ -551,6 +536,10 @@ async function agentCreateOffer(viewerId) {
       if (msg.type === 'set_audio_mode' && msg.mode) agentSetAudioMode(msg.mode);
       if (msg.type === 'win_shortcut' && msg.keys && IS_ELECTRON) {
         window.electronAPI.handleControl({ type: 'win_shortcut', keys: msg.keys });
+      }
+
+      if (msg.type === 'cad' && IS_ELECTRON) {
+        window.electronAPI.handleControl({ type: 'cad' });
       }
 
       if (msg.type === 'request_credentials') {
@@ -1449,17 +1438,22 @@ async function agentStartNativeCapture() {
         agent.nativeCaptureCanvas.height = height;
       }
 
-      // Convert BGRA → RGBA for canvas ImageData
-      const imageData = new ImageData(width, height);
-      const dst = imageData.data;
-      const len = width * height * 4;
-      for (let i = 0; i < len; i += 4) {
-        dst[i]     = pixels[i + 2]; // R ← B
-        dst[i + 1] = pixels[i + 1]; // G
-        dst[i + 2] = pixels[i];     // B ← R
-        dst[i + 3] = 255;           // A (opaque)
+      // Convert BGRA → RGBA for canvas ImageData via a reusable buffer
+      // Uses bulk copy + single-pass swap to minimize per-pixel overhead
+      if (!agent._bgraBuf || agent._bgraBuf.length !== width * height * 4) {
+        agent._bgraBuf = new Uint8ClampedArray(width * height * 4);
       }
-
+      agent._bgraBuf.set(pixels);
+      const buf = agent._bgraBuf;
+      const len = width * height * 4;
+      // Bulk swap R↔B in place (every group of 4: BGRA → RGBA)
+      for (let i = 0; i < len; i += 4) {
+        const tmp = buf[i];
+        buf[i]     = buf[i + 2];
+        buf[i + 2] = tmp;
+        buf[i + 3] = 255;
+      }
+      const imageData = new ImageData(buf, width, height);
       agent.nativeCaptureCanvas.getContext('2d', { alpha: false }).putImageData(imageData, 0, 0);
     };
     window.electronAPI.onNativeCaptureFrame((frame) => {
