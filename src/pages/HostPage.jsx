@@ -522,14 +522,24 @@ async function agentCreateOffer(viewerId) {
         return;
       }
 
-      // File upload notifications from viewer → forward to host agent
-      if (msg.type === 'file-uploaded' || msg.type === 'reshow-download') {
-        console.log('[host] 📦 File upload msg:', msg.type, IS_ELECTRON ? 'electron' : 'browser');
+      // Direct file transfer: forward each chunk to host agent
+      if (msg.type === 'file-transfer-start') {
+        console.log('[host] 📦 File transfer start:', msg.name, msg.size, 'bytes,', msg.totalChunks, 'chunks');
         if (IS_ELECTRON && window.electronAPI?.handleControl) {
-          console.log('[host] 📦 Calling handleControl');
           window.electronAPI.handleControl(msg);
-        } else {
-          console.log('[host] 📦 Skipped — IS_ELECTRON=' + IS_ELECTRON + ' handleControl=' + !!window.electronAPI?.handleControl);
+        }
+        return;
+      }
+      if (msg.type === 'file-transfer-chunk') {
+        if (IS_ELECTRON && window.electronAPI?.handleControl) {
+          window.electronAPI.handleControl(msg);
+        }
+        return;
+      }
+      if (msg.type === 'file-transfer-complete') {
+        console.log('[host] 📦 File transfer complete:', msg.name);
+        if (IS_ELECTRON && window.electronAPI?.handleControl) {
+          window.electronAPI.handleControl(msg);
         }
         return;
       }
