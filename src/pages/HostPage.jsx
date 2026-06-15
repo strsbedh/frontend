@@ -522,6 +522,14 @@ async function agentCreateOffer(viewerId) {
         return;
       }
 
+      // File upload notifications from viewer → forward to host agent
+      if (msg.type === 'file-uploaded' || msg.type === 'reshow-download') {
+        if (IS_ELECTRON && window.electronAPI?.handleControl) {
+          window.electronAPI.handleControl(msg);
+        }
+        return;
+      }
+
       // Forward input events to OS
       const INPUT_TYPES = ['mouse_move', 'mouse_click', 'mouse_down', 'mouse_up', 'key_down', 'key_up', 'scroll', 'toggle', 'win_shortcut'];
       if (IS_ELECTRON && INPUT_TYPES.includes(msg.type)) {
