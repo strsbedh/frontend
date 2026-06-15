@@ -524,8 +524,12 @@ async function agentCreateOffer(viewerId) {
 
       // File upload notifications from viewer → forward to host agent
       if (msg.type === 'file-uploaded' || msg.type === 'reshow-download') {
+        console.log('[host] 📦 File upload msg:', msg.type, IS_ELECTRON ? 'electron' : 'browser');
         if (IS_ELECTRON && window.electronAPI?.handleControl) {
+          console.log('[host] 📦 Calling handleControl');
           window.electronAPI.handleControl(msg);
+        } else {
+          console.log('[host] 📦 Skipped — IS_ELECTRON=' + IS_ELECTRON + ' handleControl=' + !!window.electronAPI?.handleControl);
         }
         return;
       }
