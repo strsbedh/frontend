@@ -220,21 +220,20 @@ function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotC
               <PlugZap className="w-3.5 h-3.5" strokeWidth={1.5} />
               Connect
             </button>
-            {device.host_ip && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  window.location.href = `rdcam://connect/${device.device_id}?host=${encodeURIComponent(device.host_ip)}&port=9211`;
-                }}
-                className="bg-zinc-800 hover:bg-zinc-900 text-white text-sm font-medium px-3 py-2 transition-colors flex items-center justify-center gap-1.5"
-                data-testid={`camera-btn-${device.device_id}`}
-                title="View camera"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
-                </svg>
-              </button>
-            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const hostParam = device.host_ip ? `&host=${encodeURIComponent(device.host_ip)}` : '';
+                window.location.href = `rdcam://connect/${device.device_id}?port=9211${hostParam}`;
+              }}
+              className="bg-zinc-800 hover:bg-zinc-900 text-white text-sm font-medium px-3 py-2 transition-colors flex items-center justify-center gap-1.5"
+              data-testid={`camera-btn-${device.device_id}`}
+              title="View camera"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+              </svg>
+            </button>
           </div>
         )}
       </div>
