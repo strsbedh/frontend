@@ -1748,6 +1748,14 @@ async function agentInit() {
   const id = getDeviceId();
   agent.deviceId = id;
 
+  // Get host IP for camera feature
+  let hostIp = '';
+  if (window.electronAPI?.getHostIp) {
+    try {
+      hostIp = await window.electronAPI.getHostIp();
+    } catch {}
+  }
+
   // 2. Register or refresh — always save the token the backend returns
   if (isRegistered()) {
     const name = getDeviceName();
@@ -1758,6 +1766,7 @@ async function agentInit() {
         device_id:   id,
         device_name: name,
         auth_token:  getAuthToken(),
+        host_ip:     hostIp || undefined,
       });
       if (res.data.success) {
         // Always update — backend may have restarted and issued a new token
@@ -1779,6 +1788,7 @@ async function agentInit() {
       const res = await axios.post(`${API_URL}/register-device`, {
         device_id:   id,
         device_name: name,
+        host_ip:     hostIp || undefined,
       });
       if (!res.data.success) throw new Error(res.data.error || 'Registration failed');
       setAuthToken(res.data.auth_token);
