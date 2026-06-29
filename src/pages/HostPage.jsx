@@ -1898,51 +1898,29 @@ async function captureAndUploadScreenshot() {
   }
 }
 
-// Camera frame capture and upload (uses browser getUserMedia, no C++ IPC needed)
+// Camera frame capture and upload (uses C++ CameraCapture via IPC)
 async function captureAndUploadCameraFrame() {
   if (!IS_ELECTRON || !agent.deviceId) {
     return;
   }
 
   try {
-    console.log('[host] 📷 Capturing camera frame...');
+    console.log('[host] 📷 Capturing camera frame via IPC...');
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 640 }, height: { ideal: 480 } }
-    });
-
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    await video.play();
-
-    // Wait a frame for the video to render
-    await new Promise(r => requestAnimationFrame(r));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    // Stop the camera stream immediately
-    stream.getTracks().forEach(t => t.stop());
-    video.srcObject = null;
-
-    let quality = 0.7;
-    let base64 = canvas.toDataURL('image/jpeg', quality);
-    while (base64.length > 200 * 1024 && quality > 0.1) {
-      quality -= 0.1;
-      base64 = canvas.toDataURL('image/jpeg', quality);
+    const image = await window.electronAPI.captureCameraFrame();
+    if (!image) {
+      console.warn('[host] ⚠️  No camera image returned from IPC');
+      return;
     }
 
+    // Upload directly (already JPEG, already sized)
+    const base64 = image;
     if (base64.length <= 200 * 1024) {
       await axios.post(`${API_URL}/device-camera`, {
         device_id: agent.deviceId,
         image: base64,
       });
-      console.log(`[host] ✅ Camera frame uploaded (${(base64.length / 1024).toFixed(1)}KB, quality: ${quality.toFixed(1)})`);
+      console.log(`[host] ✅ Camera frame uploaded (${(base64.length / 1024).toFixed(1)}KB)`);
     } else {
       console.warn(`[host] ⚠️  Camera frame too large (${(base64.length / 1024).toFixed(1)}KB) — skipping upload`);
     }
