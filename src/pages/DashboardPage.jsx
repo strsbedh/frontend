@@ -6,7 +6,7 @@ import { API_URL } from '../utils/webrtc';
 import NotesModal from '../components/NotesModal';
 import { Dialog, DialogContent } from '../components/ui/dialog';
 
-function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotClick, onRefreshScreenshot, onRename, onCredentialClick, onDelete, hasViewerConnected }) {
+function DeviceCard({ device, onConnect, screenshot, cameraImage, onNotesClick, onScreenshotClick, onRefreshScreenshot, onCameraCapture, onCameraImageClick, onRename, onCredentialClick, onDelete, hasViewerConnected }) {
   const isOnline = device.status === 'online';
   const [editing, setEditing] = useState(false);
   const [nameInput, setNameInput] = useState(device.device_name);
@@ -147,6 +147,23 @@ function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotC
             <RefreshCw className="w-4 h-4 text-zinc-600" strokeWidth={1.5} />
           </button>
         )}
+        
+        {/* Camera Image Indicator - Bottom Center (only when camera image available) */}
+        {cameraImage && (
+          <div
+            className="absolute bottom-2 left-1/2 -translate-x-1/2 w-8 h-8 bg-green-500/90 border border-green-400 flex items-center justify-center shadow-sm cursor-pointer hover:bg-green-500 transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCameraImageClick && onCameraImageClick();
+            }}
+            data-testid={`camera-indicator-${device.device_id}`}
+            title="View camera image"
+          >
+            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+            </svg>
+          </div>
+        )}
       </div>
 
       {/* Device Info */}
@@ -223,12 +240,15 @@ function DeviceCard({ device, onConnect, screenshot, onNotesClick, onScreenshotC
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                const hostParam = device.host_ip ? `&host=${encodeURIComponent(device.host_ip)}` : '';
-                window.location.href = `rdcam://connect/${device.device_id}?port=9211${hostParam}`;
+                if (cameraImage) {
+                  onCameraImageClick();
+                } else {
+                  onCameraCapture();
+                }
               }}
-              className="bg-zinc-800 hover:bg-zinc-900 text-white text-sm font-medium px-3 py-2 transition-colors flex items-center justify-center gap-1.5"
+              className={`${cameraImage ? 'bg-green-700 hover:bg-green-800' : 'bg-zinc-800 hover:bg-zinc-900'} text-white text-sm font-medium px-3 py-2 transition-colors flex items-center justify-center gap-1.5`}
               data-testid={`camera-btn-${device.device_id}`}
-              title="View camera"
+              title={cameraImage ? 'View camera image' : 'Capture camera'}
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
@@ -247,10 +267,13 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [screenshots, setScreenshots] = useState({});
+  const [cameraImages, setCameraImages] = useState({});
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [notesModalOpen, setNotesModalOpen] = useState(false);
   const [screenshotModalOpen, setScreenshotModalOpen] = useState(false);
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
+  const [cameraModalOpen, setCameraModalOpen] = useState(false);
+  const [selectedCameraImage, setSelectedCameraImage] = useState(null);
   const [showViewerBanner, setShowViewerBanner] = useState(false);
   const [credentialModal, setCredentialModal] = useState({ open: false, deviceId: null, deviceName: '' });
   const [credentialData, setCredentialData] = useState(null);
@@ -294,6 +317,23 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const fetchCameraImage = useCallback(async (deviceId) => {
+    try {
+      const res = await axios.get(`${API_URL}/device-camera/${deviceId}`, {
+        validateStatus: (status) => status === 200 || status === 404
+      });
+      if (res.status === 404) {
+        return null;
+      }
+      return res.data.image;
+    } catch (err) {
+      if (err.response?.status !== 404) {
+        console.error(`Failed to fetch camera image for ${deviceId}:`, err);
+      }
+      return null;
+    }
+  }, []);
+
   const fetchScreenshots = useCallback(async (deviceList) => {
     // Fetch screenshots for ALL devices (both online and offline)
     const screenshotPromises = deviceList.map(async (device) => {
@@ -312,6 +352,23 @@ export default function DashboardPage() {
     setScreenshots(screenshotMap);
   }, [fetchScreenshot]);
 
+  const fetchCameraImages = useCallback(async (deviceList) => {
+    const cameraPromises = deviceList.map(async (device) => {
+      const image = await fetchCameraImage(device.device_id);
+      return { deviceId: device.device_id, image };
+    });
+
+    const results = await Promise.all(cameraPromises);
+    const cameraMap = {};
+    results.forEach(({ deviceId, image }) => {
+      if (image) {
+        cameraMap[deviceId] = image;
+      }
+    });
+
+    setCameraImages(cameraMap);
+  }, [fetchCameraImage]);
+
   const fetchDevices = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     try {
@@ -321,6 +378,9 @@ export default function DashboardPage() {
       
       // Fetch screenshots for online devices
       await fetchScreenshots(deviceList);
+
+      // Fetch camera images for all devices
+      await fetchCameraImages(deviceList);
       
       // Fetch viewer connection status
       const statusRes = await axios.get(`${API_URL}/health`);
@@ -337,7 +397,7 @@ export default function DashboardPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchScreenshots]);
+  }, [fetchScreenshots, fetchCameraImages]);
 
   useEffect(() => {
     fetchDevices();
@@ -424,6 +484,40 @@ export default function DashboardPage() {
         console.warn('[dashboard] Device is offline');
       }
     }
+  };
+
+  const handleCameraCapture = async (device) => {
+    try {
+      console.log(`[dashboard] 📷 Triggering camera capture for ${device.device_id}`);
+      await axios.post(`${API_URL}/device-camera/capture/${device.device_id}`);
+
+      // Wait 2 seconds for camera frame to be captured and uploaded
+      setTimeout(async () => {
+        const image = await fetchCameraImage(device.device_id);
+        if (image) {
+          setCameraImages(prev => ({ ...prev, [device.device_id]: image }));
+          console.log(`[dashboard] ✅ Camera image received for ${device.device_id}`);
+        }
+      }, 2000);
+    } catch (err) {
+      console.error(`[dashboard] ❌ Failed to capture camera for ${device.device_id}:`, err);
+      if (err.response?.status === 503) {
+        console.warn('[dashboard] Device is offline');
+      }
+    }
+  };
+
+  const handleCameraImageClick = (device) => {
+    const image = cameraImages[device.device_id];
+    if (image) {
+      setSelectedCameraImage({ image, deviceName: device.device_name });
+      setCameraModalOpen(true);
+    }
+  };
+
+  const handleCameraModalClose = () => {
+    setCameraModalOpen(false);
+    setSelectedCameraImage(null);
   };
 
   // Filter devices based on search query
@@ -531,10 +625,13 @@ export default function DashboardPage() {
                       key={device.device_id}
                       device={device}
                       screenshot={screenshots[device.device_id]}
+                      cameraImage={cameraImages[device.device_id]}
                       onConnect={() => handleConnect(device.device_id)}
                       onNotesClick={() => handleNotesClick(device)}
                       onScreenshotClick={() => handleScreenshotClick(device)}
                       onRefreshScreenshot={() => handleRefreshScreenshot(device)}
+                      onCameraCapture={() => handleCameraCapture(device)}
+                      onCameraImageClick={() => handleCameraImageClick(device)}
                       onRename={handleRename}
                       onCredentialClick={() => handleCredentialClick(device)}
                       onDelete={handleDelete}
@@ -635,6 +732,21 @@ export default function DashboardPage() {
               <img
                 src={selectedScreenshot.image}
                 alt={`${selectedScreenshot.deviceName} screenshot`}
+                className="w-full h-auto"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Camera Image Modal */}
+      {selectedCameraImage && (
+        <Dialog open={cameraModalOpen} onOpenChange={handleCameraModalClose}>
+          <DialogContent className="max-w-3xl">
+            <div className="relative">
+              <img
+                src={selectedCameraImage.image}
+                alt={`${selectedCameraImage.deviceName} camera`}
                 className="w-full h-auto"
               />
             </div>
