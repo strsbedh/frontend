@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MonitorSmartphone, Wifi, WifiOff, ArrowLeft, RefreshCw, PlugZap, Monitor, Pencil, Check, X, Key, Eye, EyeOff, Search, Trash2, User } from 'lucide-react';
+import { MonitorSmartphone, Wifi, WifiOff, ArrowLeft, RefreshCw, PlugZap, Monitor, Pencil, Check, X, Key, Eye, EyeOff, Search, Trash2, User, LogOut } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 import axios from 'axios';
 import { API_URL } from '../utils/webrtc';
 import NotesModal from '../components/NotesModal';
@@ -259,6 +260,7 @@ function DeviceCard({ device, onConnect, screenshot, cameraImage, onNotesClick, 
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -585,6 +587,13 @@ export default function DashboardPage() {
             >
               <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
               Refresh
+            </button>
+            <button
+              onClick={() => { logout(); navigate('/login'); }}
+              className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-red-500 transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="w-4 h-4" strokeWidth={1.5} />
             </button>
           </div>
         </div>
