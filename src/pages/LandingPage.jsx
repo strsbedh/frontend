@@ -1,16 +1,26 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Wifi, Shield, Eye } from 'lucide-react';
+import { ArrowRight, Wifi, Shield, Eye, LogOut } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 import { isRegistered, getDeviceName, getDeviceId } from '../utils/device';
 
 export default function LandingPage() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const registered = isRegistered();
   const name = getDeviceName();
   const id = getDeviceId();
 
   return (
-    <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6" data-testid="landing-page">
+    <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6 relative" data-testid="landing-page">
+      <button
+        onClick={() => { logout(); navigate('/login'); }}
+        className="absolute top-4 right-4 flex items-center gap-1.5 text-xs text-zinc-400 hover:text-red-500 transition-colors"
+        title="Sign out"
+      >
+        <LogOut className="w-3.5 h-3.5" strokeWidth={1.5} />
+        Sign out
+      </button>
       <div className="w-full max-w-lg">
         {/* Header */}
         <div className="mb-12 text-center">
