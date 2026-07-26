@@ -126,8 +126,21 @@ export default function DashboardPage() {
 
   const filtered = devices.filter(d => {
     const q = searchQuery.toLowerCase();
+    if (!q) return true;
     return d.device_name.toLowerCase().includes(q) || d.device_id.toLowerCase().includes(q) || (d.whoami && d.whoami.toLowerCase().includes(q));
   });
+  const [noteSearchIds, setNoteSearchIds] = useState([]);
+  useEffect(() => {
+    if (!searchQuery.trim()) { setNoteSearchIds([]); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await axios.get(`${API_URL}/device-notes/search/${encodeURIComponent(searchQuery)}`, { validateStatus: s => s === 200 || s === 404 });
+        if (res.status === 200) setNoteSearchIds(res.data.results.map(r => r.device_id));
+      } catch {}
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+  const searchResults = searchQuery ? [...new Set([...filtered.map(d => d.device_id), ...noteSearchIds])].map(id => devices.find(d => d.device_id === id)).filter(Boolean) : filtered;
 
   return (
     <div className="h-screen flex overflow-hidden bg-[#101010] text-[#ccc] select-none" style={{ fontFamily: "'Segoe UI', Arial, sans-serif" }}>
@@ -176,11 +189,11 @@ export default function DashboardPage() {
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {loading ? (
             <div className="text-center py-12 text-[#666] text-sm">Loading sessions...</div>
-          ) : error && filtered.length === 0 ? (
+          ) : error && searchResults.length === 0 ? (
             <div className="text-center py-12 text-[#666] text-sm">{error}</div>
-          ) : filtered.length === 0 ? (
+          ) : searchResults.length === 0 ? (
             <div className="text-center py-12 text-[#666] text-sm">No sessions found</div>
-          ) : filtered.map(d => {
+          ) : searchResults.map(d => {
             const isOnline = d.status === 'online' || d.status === 'booting';
             const isSelected = d.device_id === selectedDeviceId;
             return (
