@@ -124,12 +124,15 @@ export default function DashboardPage() {
     window.location.href = `rdviewer://connect/${deviceId}`;
   };
 
-  const filtered = devices.filter(d => {
+  const sourceDevices = sessionFilter === 'active' ? activeDevices : devices;
+  const filtered = sourceDevices.filter(d => {
     const q = searchQuery.toLowerCase();
     if (!q) return true;
     return d.device_name.toLowerCase().includes(q) || d.device_id.toLowerCase().includes(q) || (d.whoami && d.whoami.toLowerCase().includes(q));
   });
   const [noteSearchIds, setNoteSearchIds] = useState([]);
+  const [sessionFilter, setSessionFilter] = useState('all');
+  const activeDevices = devices.filter(d => d.status === 'online' || d.status === 'booting');
   useEffect(() => {
     if (!searchQuery.trim()) { setNoteSearchIds([]); return; }
     const timer = setTimeout(async () => {
@@ -155,9 +158,13 @@ export default function DashboardPage() {
         <button className="bg-[#00bcd4] text-white border-none rounded px-0 py-3 text-sm font-semibold cursor-pointer text-center w-full hover:bg-[#00acc1] transition-colors">
           Create +
         </button>
-        <div className="flex items-center justify-between bg-[#252538] rounded px-3 py-2.5 cursor-pointer text-[#ddd] text-sm">
+        <div className={`flex items-center justify-between bg-[#252538] rounded px-3 py-2.5 cursor-pointer text-[#ddd] text-sm ${sessionFilter === 'all' ? 'ring-1 ring-[#00bcd4]' : ''}`} onClick={() => setSessionFilter('all')}>
           <span className="font-semibold">My Sessions</span>
           <span className="bg-[#444] text-[#ccc] rounded px-[7px] py-[2px] text-xs font-bold">{devices.length}</span>
+        </div>
+        <div className={`flex items-center justify-between bg-[#1a1a2e] rounded px-3 py-2.5 cursor-pointer text-[#ddd] text-sm ${sessionFilter === 'active' ? 'ring-1 ring-[#4caf50]' : ''}`} onClick={() => setSessionFilter('active')}>
+          <span className="flex items-center gap-2"><span className="w-2 h-2 bg-[#4caf50] rounded-full"></span><span>Active Sessions</span></span>
+          <span className="bg-[#4caf50] text-white rounded px-[7px] py-[2px] text-xs font-bold">{activeDevices.length}</span>
         </div>
         <div className="flex-1" />
         <div className="flex items-center gap-2 text-xs text-[#555] cursor-pointer hover:text-[#aaa]" onClick={() => { logout(); navigate('/login'); }}>
