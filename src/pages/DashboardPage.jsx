@@ -122,8 +122,12 @@ export default function DashboardPage() {
 
   const handleConnect = (deviceId) => {
     window.location.href = `rdviewer://connect/${deviceId}`;
+    let detected = false;
+    const onBlur = () => { detected = true; };
+    window.addEventListener('blur', onBlur);
     setTimeout(() => {
-      if (!document.hidden) {
+      window.removeEventListener('blur', onBlur);
+      if (!detected) {
         setShowDownloadPopup(true);
       }
     }, 2000);
