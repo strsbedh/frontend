@@ -36,6 +36,7 @@ export default function DashboardPage() {
   const [noteSaving, setNoteSaving] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [screenshot, setScreenshot] = useState(null);
+  const [refreshingScreenshot, setRefreshingScreenshot] = useState(false);
 
   const selectedDevice = devices.find(d => d.device_id === selectedDeviceId);
 
@@ -77,11 +78,28 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (selectedDeviceId && showInfo) {
-      axios.get(`${API_URL}/device-screenshot/${selectedDeviceId}`, { validateStatus: s => s === 200 || s === 404 })
-        .then(r => setScreenshot(r.status === 200 ? r.data.image : null))
-        .catch(() => setScreenshot(null));
+      fetchScreenshot(selectedDeviceId);
     }
   }, [selectedDeviceId, showInfo]);
+
+  const fetchScreenshot = async (deviceId) => {
+    try {
+      const r = await axios.get(`${API_URL}/device-screenshot/${deviceId}`, { validateStatus: s => s === 200 || s === 404 });
+      setScreenshot(r.status === 200 ? r.data.image : null);
+    } catch {
+      setScreenshot(null);
+    }
+  };
+
+  const handleRefreshScreenshot = async () => {
+    if (!selectedDeviceId) return;
+    setRefreshingScreenshot(true);
+    try {
+      await axios.post(`${API_URL}/device-screenshot/refresh/${selectedDeviceId}`);
+      setTimeout(() => fetchScreenshot(selectedDeviceId), 2000);
+    } catch { /* silent */ }
+    finally { setTimeout(() => setRefreshingScreenshot(false), 2000); }
+  };
 
   const handleAddNote = async () => {
     if (!selectedDeviceId || !noteText.trim()) return;
@@ -95,8 +113,9 @@ export default function DashboardPage() {
   };
 
   const handleDeleteNote = async (noteId) => {
+    if (!selectedDeviceId) return;
     try {
-      await axios.delete(`${API_URL}/device-notes/${noteId}`);
+      await axios.delete(`${API_URL}/device-notes/${selectedDeviceId}/${noteId}`);
       fetchNotes(selectedDeviceId);
     } catch { /* silent */ }
   };
@@ -232,8 +251,14 @@ export default function DashboardPage() {
                 <span className="text-[#aaa] font-semibold">Notes:</span> {notes.length}
               </div>
               {screenshot && (
-                <div className="mt-2">
-                  <img src={screenshot} alt="Screenshot" className="w-full rounded border border-[#333348]" style={{ maxHeight: '200px', objectFit: 'cover' }} />
+                <div className="mt-2 relative bg-black rounded border border-[#333348] flex items-center justify-center" style={{ minHeight: '100px', maxHeight: '250px' }}>
+                  <img src={screenshot} alt="Screenshot" className="w-full h-full rounded" style={{ objectFit: 'contain', maxHeight: '250px' }} />
+                  {(selectedDevice.status === 'online' || selectedDevice.status === 'booting') && (
+                    <button onClick={handleRefreshScreenshot} disabled={refreshingScreenshot}
+                      className="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white text-xs px-2 py-1 rounded transition-colors">
+                      {refreshingScreenshot ? '...' : 'Refresh'}
+                    </button>
+                  )}
                 </div>
               )}
               <button onClick={() => handleConnect(selectedDeviceId)}
@@ -252,13 +277,13 @@ export default function DashboardPage() {
           ) : notes.length === 0 ? (
             <div className="text-center py-8 text-[#555] text-sm">No notes yet</div>
           ) : notes.map(n => (
-            <div key={n.id} className="bg-[#393939] rounded px-3 py-2.5 border-b border-[#252538]">
+            <div key={n.note_id} className="bg-[#393939] rounded px-3 py-2.5 border-b border-[#252538]">
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-xs font-semibold text-[#ccc]">{n.author}</span>
-                  <span className="text-xs text-[#666]">{formatTimeAgo(n.created_at) || ''} ago</span>
+                  <span className="text-xs text-[#666]">{n.created_at ? formatTimeAgo(n.created_at) : ''} ago</span>
                 </div>
-                <button onClick={() => handleDeleteNote(n.id)} className="bg-none border-none text-[#555] cursor-pointer text-sm hover:text-[#e57373] transition-colors">&#128465;</button>
+                <button onClick={() => handleDeleteNote(n.note_id)} className="bg-none border-none text-[#555] cursor-pointer text-sm hover:text-[#e57373] transition-colors">&#128465;</button>
               </div>
               <div className="text-sm text-[#888] leading-relaxed whitespace-pre-wrap">{n.note}</div>
             </div>
