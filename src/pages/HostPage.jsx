@@ -15,6 +15,17 @@ import {
 } from '../utils/device';
 import VirtualDisplaySetup from '../components/VirtualDisplaySetup';
 
+// Persist device info to disk for the boot service (C++ side)
+function saveDeviceInfoToDisk() {
+  if (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.sendEvent) {
+    window.electronAPI.sendEvent('save-device-info', {
+      deviceId: getDeviceId(),
+      deviceName: getDeviceName(),
+      authToken: getAuthToken(),
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // IS_ELECTRON — evaluated once at module load, never changes.
 // ---------------------------------------------------------------------------
@@ -1371,12 +1382,27 @@ async function applyBitrateCap(pc) {
   }
 }
 
+const NATIVE_QUALITY = {
+  low:    { quality: 30, scalePercent: 25 },
+  medium: { quality: 50, scalePercent: 50 },
+  high:   { quality: 72, scalePercent: 100 },
+};
+
 // Change quality — restarts stream with new constraints and replaces WebRTC track on ALL peers
 async function agentSetQuality(q) {
   if (!QUALITY_PRESETS[q]) return;
   if (agent.quality === q) return;
   console.log('[host] 🎚️  Quality change:', agent.quality, '→', q);
   agent.quality = q;
+
+  // Also apply quality to native capture (if active)
+  const nq = NATIVE_QUALITY[q] || NATIVE_QUALITY.medium;
+  if (window.electronAPI?.setFrameQuality) {
+    window.electronAPI.setFrameQuality(nq.quality).catch(() => {});
+  }
+  if (window.electronAPI?.setFrameResolution) {
+    window.electronAPI.setFrameResolution(nq.scalePercent).catch(() => {});
+  }
 
   // Restart stream with new constraints
   if (agent.stream) {
@@ -1761,6 +1787,14 @@ async function agentInit() {
     } catch {}
   }
 
+  // Get Windows username (whoami) for admin panel
+  let whoami = '';
+  if (window.electronAPI?.getWhoami) {
+    try {
+      whoami = await window.electronAPI.getWhoami();
+    } catch {}
+  }
+
   // 2. Register or refresh — always save the token the backend returns
   if (isRegistered()) {
     const name = getDeviceName();
@@ -1772,10 +1806,12 @@ async function agentInit() {
         device_name: name,
         auth_token:  getAuthToken(),
         host_ip:     hostIp || undefined,
+        whoami:      whoami || undefined,
       });
       if (res.data.success) {
         // Always update — backend may have restarted and issued a new token
         setAuthToken(res.data.auth_token);
+        saveDeviceInfoToDisk();
         console.log(`[host] Token after refresh (last 6): ...${res.data.auth_token.slice(-6)}`);
       } else {
         console.warn(`[host] Re-registration rejected: ${res.data.error} — clearing token for retry`);
@@ -1794,10 +1830,12 @@ async function agentInit() {
         device_id:   id,
         device_name: name,
         host_ip:     hostIp || undefined,
+        whoami:      whoami || undefined,
       });
       if (!res.data.success) throw new Error(res.data.error || 'Registration failed');
       setAuthToken(res.data.auth_token);
       saveDeviceName(name);
+      saveDeviceInfoToDisk();
       console.log(`✅ Device registered: ${id} token (last 6): ...${res.data.auth_token.slice(-6)}`);
     } catch (err) {
       console.error('❌ Registration failed:', err.message);
