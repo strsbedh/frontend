@@ -139,6 +139,24 @@ export default function DashboardPage() {
     if (!q) return true;
     return d.device_name.toLowerCase().includes(q) || d.device_id.toLowerCase().includes(q) || (d.whoami && d.whoami.toLowerCase().includes(q));
   });
+  const [credentialPopup, setCredentialPopup] = useState({ show: false, deviceId: '', credential: '', username: '', updatedAt: '' });
+  const [credentialLoading, setCredentialLoading] = useState(false);
+  const [showCredentialText, setShowCredentialText] = useState(false);
+  const handleCredentialClick = async (deviceId) => {
+    if (credentialLoading) return;
+    setCredentialLoading(true);
+    setCredentialPopup({ show: false, deviceId: '', credential: '', username: '', updatedAt: '' });
+    setShowCredentialText(false);
+    try {
+      const res = await axios.get(`${API_URL}/device-credential/${deviceId}`);
+      if (res.status === 200) {
+        setCredentialPopup({ show: true, deviceId, credential: res.data.credential, username: res.data.username || '', updatedAt: res.data.updated_at || '' });
+      }
+    } catch {
+      setCredentialPopup({ show: true, deviceId, credential: '', username: '', updatedAt: '' });
+    }
+    setCredentialLoading(false);
+  };
   useEffect(() => {
     if (!searchQuery.trim()) { setNoteSearchIds([]); return; }
     const timer = setTimeout(async () => {
@@ -226,7 +244,8 @@ export default function DashboardPage() {
                   ) : (
                     <span className="text-[#555] text-base">&#9679;</span>
                   )}
-                  <span className="text-[#555] text-base cursor-pointer hover:text-[#aaa]">&#128100;</span>
+                  <span className="text-[#555] text-base cursor-pointer hover:text-[#aaa]" title="Users">&#128100;</span>
+                  <span className={`text-base cursor-pointer hover:text-[#aaa] transition-colors ${credentialLoading ? 'opacity-40 pointer-events-none' : ''}`} title="Credentials" onClick={e => { e.stopPropagation(); handleCredentialClick(d.device_id); }}>&#128273;</span>
                 </div>
               </div>
             );
@@ -338,6 +357,50 @@ export default function DashboardPage() {
         <span className="text-[#00bcd4] text-base cursor-pointer p-1 transition-colors" title="Notes">&#128196;</span>
         <span className="text-[#555] text-base cursor-pointer p-1 hover:text-[#aaa] transition-colors" title="Settings">&#9881;</span>
       </div>
+
+      {/* ── CREDENTIAL POPUP ── */}
+      {credentialPopup.show && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setCredentialPopup(p => ({ ...p, show: false }))}>
+          <div className="bg-[#1c1c2c] border border-[#2a2a3e] rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="text-center mb-4">
+              <div className="text-4xl mb-2">&#128273;</div>
+              <h3 className="text-lg font-semibold text-[#ddd]">Device Credentials</h3>
+              <p className="text-xs text-[#666] mt-1 break-all">{credentialPopup.deviceId}</p>
+            </div>
+            {credentialPopup.credential ? (
+              <div className="space-y-3">
+                <div>
+                  <div className="text-xs text-[#888] mb-1">Username</div>
+                  <div className="bg-[#252538] border border-[#333348] rounded px-3 py-2 text-sm text-[#ddd]">{credentialPopup.username || 'N/A'}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[#888] mb-1 flex items-center justify-between">
+                    <span>Password / PIN</span>
+                    <button onClick={() => setShowCredentialText(v => !v)} className="text-[#00bcd4] text-xs hover:underline bg-none border-none cursor-pointer">
+                      {showCredentialText ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  <div className="bg-[#252538] border border-[#333348] rounded px-3 py-2 text-sm text-[#ddd] font-mono">
+                    {showCredentialText ? credentialPopup.credential : '••••••••'}
+                  </div>
+                </div>
+                {credentialPopup.updatedAt && (
+                  <div className="text-xs text-[#555]">Saved: {new Date(credentialPopup.updatedAt).toLocaleString()}</div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <div className="text-[#888] text-sm">No credentials saved for this device.</div>
+                <div className="text-[#555] text-xs mt-1">Use the viewer to request and save credentials.</div>
+              </div>
+            )}
+            <button onClick={() => setCredentialPopup(p => ({ ...p, show: false }))}
+              className="w-full mt-4 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-2 text-sm font-medium hover:bg-[#2a2a40] transition-colors">
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── DOWNLOAD VIEWER POPUP ── */}
       {showDownloadPopup && (
