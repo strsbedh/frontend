@@ -124,15 +124,15 @@ export default function DashboardPage() {
     window.location.href = `rdviewer://connect/${deviceId}`;
   };
 
+  const [noteSearchIds, setNoteSearchIds] = useState([]);
+  const [sessionFilter, setSessionFilter] = useState('all');
+  const activeDevices = devices.filter(d => d.status === 'online' || d.status === 'booting');
   const sourceDevices = sessionFilter === 'active' ? activeDevices : devices;
   const filtered = sourceDevices.filter(d => {
     const q = searchQuery.toLowerCase();
     if (!q) return true;
     return d.device_name.toLowerCase().includes(q) || d.device_id.toLowerCase().includes(q) || (d.whoami && d.whoami.toLowerCase().includes(q));
   });
-  const [noteSearchIds, setNoteSearchIds] = useState([]);
-  const [sessionFilter, setSessionFilter] = useState('all');
-  const activeDevices = devices.filter(d => d.status === 'online' || d.status === 'booting');
   useEffect(() => {
     if (!searchQuery.trim()) { setNoteSearchIds([]); return; }
     const timer = setTimeout(async () => {
