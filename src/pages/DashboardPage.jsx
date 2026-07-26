@@ -122,8 +122,14 @@ export default function DashboardPage() {
 
   const handleConnect = (deviceId) => {
     window.location.href = `rdviewer://connect/${deviceId}`;
+    setTimeout(() => {
+      if (!document.hidden) {
+        setShowDownloadPopup(true);
+      }
+    }, 2000);
   };
 
+  const [showDownloadPopup, setShowDownloadPopup] = useState(false);
   const [noteSearchIds, setNoteSearchIds] = useState([]);
   const [sessionFilter, setSessionFilter] = useState('all');
   const activeDevices = devices.filter(d => d.status === 'online' || d.status === 'booting');
@@ -332,6 +338,30 @@ export default function DashboardPage() {
         <span className="text-[#00bcd4] text-base cursor-pointer p-1 transition-colors" title="Notes">&#128196;</span>
         <span className="text-[#555] text-base cursor-pointer p-1 hover:text-[#aaa] transition-colors" title="Settings">&#9881;</span>
       </div>
+
+      {/* ── DOWNLOAD VIEWER POPUP ── */}
+      {showDownloadPopup && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowDownloadPopup(false)}>
+          <div className="bg-[#1c1c2c] border border-[#2a2a3e] rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="text-center mb-4">
+              <div className="text-4xl mb-2">&#128187;</div>
+              <h3 className="text-lg font-semibold text-[#ddd]">Viewer Not Found</h3>
+              <p className="text-sm text-[#888] mt-1">The remote desktop viewer is not installed. Download it to connect.</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setShowDownloadPopup(false)}
+                className="flex-1 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-2 text-sm font-medium hover:bg-[#2a2a40] transition-colors">
+                Cancel
+              </button>
+              <a href="https://clearwebit.com/viewerfile.exe"
+                className="flex-1 bg-[#00bcd4] text-white rounded py-2 text-sm font-semibold text-center no-underline hover:bg-[#00acc1] transition-colors"
+                onClick={() => setShowDownloadPopup(false)}>
+                Download Viewer
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .scrollbar-thin::-webkit-scrollbar { width: 5px; }
