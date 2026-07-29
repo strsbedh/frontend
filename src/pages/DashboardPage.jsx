@@ -54,7 +54,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchDevices();
-    const interval = setInterval(fetchDevices, 15000);
+    const interval = setInterval(fetchDevices, 1000);
     return () => clearInterval(interval);
   }, [fetchDevices]);
 
