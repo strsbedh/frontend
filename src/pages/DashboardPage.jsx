@@ -228,6 +228,10 @@ export default function DashboardPage() {
           <span className="flex items-center gap-2"><span className="w-2 h-2 bg-[#4caf50] rounded-full"></span><span>Active Sessions</span></span>
           <span className="bg-[#4caf50] text-white rounded px-[7px] py-[2px] text-xs font-bold">{activeDevices.length}</span>
         </div>
+        <div className="flex items-center gap-2 bg-[#1a1a2e] rounded px-3 py-2.5 cursor-pointer text-[#ddd] text-sm hover:bg-[#252538] transition-colors" onClick={() => navigate('/compromised')}>
+          <span className="text-[#ffa726]">&#9888;</span>
+          <span className="text-sm">Compromised</span>
+        </div>
         <div className="flex-1" />
         <div className="flex items-center gap-2 text-xs text-[#555] cursor-pointer hover:text-[#aaa]" onClick={() => { logout(); navigate('/login'); }}>
           <span>&#10140;</span>
