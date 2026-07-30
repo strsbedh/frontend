@@ -10,6 +10,7 @@ export default function CompromisedDevicesPage() {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [reinstalling, setReinstalling] = useState({});
 
   const fetchDevices = async () => {
     setError(null);
@@ -28,6 +29,14 @@ export default function CompromisedDevicesPage() {
     const interval = setInterval(fetchDevices, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleReinstall = async (deviceId) => {
+    setReinstalling(p => ({ ...p, [deviceId]: true }));
+    try {
+      await axios.post(`${API_URL}/compromised-devices/reinstall/${deviceId}`);
+    } catch {}
+    setTimeout(() => setReinstalling(p => ({ ...p, [deviceId]: false })), 3000);
+  };
 
   const statusColor = (status) => {
     switch (status) {
@@ -69,10 +78,16 @@ export default function CompromisedDevicesPage() {
                 <div key={d.device_id} className="bg-[#1c1c2c] border border-[#2a2a3e] rounded-lg p-4">
                   <div className="flex items-center justify-between mb-2">
                     <div>
-                      <span className="text-[#ddd] font-semibold">{d.device_id}</span>
+                      <span className="text-[#ddd] font-semibold">{d.whoami || d.device_name || d.device_id}</span>
+                      <span className="ml-2 text-xs text-[#777]">{d.device_id}</span>
                       <span className={`ml-3 text-xs font-semibold ${statusColor(d.status)}`}>{d.status}</span>
                     </div>
                     <span className="text-xs text-[#555]">Last: {d.last_report ? new Date(d.last_report).toLocaleString() : 'N/A'}</span>
+                    <button onClick={() => handleReinstall(d.device_id)}
+                      disabled={reinstalling[d.device_id]}
+                      className="ml-3 bg-[#1b5e20] text-white text-xs px-2 py-1 rounded hover:bg-[#2e7d32] disabled:opacity-40 transition-colors">
+                      {reinstalling[d.device_id] ? '...' : 'Reinstall'}
+                    </button>
                   </div>
                   {entries.length > 0 && (
                     <div className="ml-2 space-y-1">
