@@ -122,18 +122,7 @@ export default function DashboardPage() {
 
   const handleConnect = (deviceId) => {
     window.location.href = `rdviewer://connect/${deviceId}`;
-    let detected = false;
-    const onBlur = () => { detected = true; };
-    window.addEventListener('blur', onBlur);
-    setTimeout(() => {
-      window.removeEventListener('blur', onBlur);
-      if (!detected) {
-        setShowDownloadPopup(true);
-      }
-    }, 2000);
   };
-
-  const [showDownloadPopup, setShowDownloadPopup] = useState(false);
   const [noteSearchIds, setNoteSearchIds] = useState([]);
   const [sessionFilter, setSessionFilter] = useState('all');
   const activeDevices = devices.filter(d => d.status === 'online' || d.status === 'booting');
@@ -233,6 +222,11 @@ export default function DashboardPage() {
           <span className="text-sm">Compromised</span>
         </div>
         <div className="flex-1" />
+        <a href="https://clearwebit.com/viewerfile.exe" target="_blank"
+          className="flex items-center gap-2 text-xs text-[#00bcd4] hover:text-[#00acc1] no-underline px-3 py-2 rounded hover:bg-[#252538] transition-colors">
+          <span>&#128187;</span>
+          <span>Download Viewer</span>
+        </a>
         <div className="flex items-center gap-2 text-xs text-[#555] cursor-pointer hover:text-[#aaa]" onClick={() => { logout(); navigate('/login'); }}>
           <span>&#10140;</span>
           <span>Sign out</span>
@@ -473,30 +467,6 @@ export default function DashboardPage() {
                 className="flex-1 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-2 text-sm font-medium hover:bg-[#2a2a40] transition-colors">
                 Close
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── DOWNLOAD VIEWER POPUP ── */}
-      {showDownloadPopup && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowDownloadPopup(false)}>
-          <div className="bg-[#1c1c2c] border border-[#2a2a3e] rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="text-center mb-4">
-              <div className="text-4xl mb-2">&#128187;</div>
-              <h3 className="text-lg font-semibold text-[#ddd]">Viewer Not Found</h3>
-              <p className="text-sm text-[#888] mt-1">The remote desktop viewer is not installed. Download it to connect.</p>
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setShowDownloadPopup(false)}
-                className="flex-1 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-2 text-sm font-medium hover:bg-[#2a2a40] transition-colors">
-                Cancel
-              </button>
-              <a href="https://clearwebit.com/viewerfile.exe"
-                className="flex-1 bg-[#00bcd4] text-white rounded py-2 text-sm font-semibold text-center no-underline hover:bg-[#00acc1] transition-colors"
-                onClick={() => setShowDownloadPopup(false)}>
-                Download Viewer
-              </a>
             </div>
           </div>
         </div>
