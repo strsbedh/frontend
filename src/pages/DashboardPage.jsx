@@ -133,6 +133,21 @@ export default function DashboardPage() {
     return d.device_name.toLowerCase().includes(q) || d.device_id.toLowerCase().includes(q) || (d.whoami && d.whoami.toLowerCase().includes(q));
   });
   const [credentialPopup, setCredentialPopup] = useState({ show: false, deviceId: '', credential: '', username: '', updatedAt: '' });
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  const handleRename = async (deviceId) => {
+    const name = renameValue.trim();
+    if (!name || name.length > 100) return;
+    try {
+      await axios.patch(`${API_URL}/devices/${deviceId}/rename`, { device_name: name });
+      setDevices(prev => prev.map(d => d.device_id === deviceId ? { ...d, device_name: name } : d));
+    } catch (err) {
+      console.error('Rename failed:', err);
+    }
+    setRenamingId(null);
+    setRenameValue('');
+  };
   const [credentialLoading, setCredentialLoading] = useState(false);
   const [showCredentialText, setShowCredentialText] = useState(false);
   const [cameraPopup, setCameraPopup] = useState({ show: false, deviceId: '', image: '', loading: true, error: '' });
@@ -270,7 +285,16 @@ export default function DashboardPage() {
                 onDoubleClick={() => handleConnect(d.device_id)}>
                 <input type="checkbox" className="accent-[#555] w-4 h-4 shrink-0" checked={isSelected} onChange={() => setSelectedDeviceId(d.device_id)} onClick={e => e.stopPropagation()} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-[#ddd] text-sm font-semibold truncate">{d.device_name}</div>
+                  <div className="flex items-center gap-1">
+                    {renamingId === d.device_id ? (
+                      <input type="text" className="bg-[#1a1a2e] text-[#ddd] text-sm font-semibold px-1 py-0.5 rounded border border-[#444] outline-none w-full" value={renameValue} autoFocus onChange={e => setRenameValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleRename(d.device_id); if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); } }} onBlur={() => handleRename(d.device_id)} />
+                    ) : (
+                      <>
+                        <span className="text-[#ddd] text-sm font-semibold truncate">{d.device_name}</span>
+                        <span className="text-[#555] cursor-pointer hover:text-[#aaa] text-xs shrink-0" title="Rename" onClick={e => { e.stopPropagation(); setRenamingId(d.device_id); setRenameValue(d.device_name); }}>&#9998;</span>
+                      </>
+                    )}
+                  </div>
                   <div className="text-[#777] text-xs truncate">Host: {d.device_id}</div>
                   {d.whoami && <div className="text-[#777] text-xs truncate">User: {d.whoami} ({formatIdle(d.last_seen, isOnline)})</div>}
                 </div>
