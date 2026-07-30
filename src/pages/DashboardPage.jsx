@@ -146,6 +146,40 @@ export default function DashboardPage() {
   const [credentialPopup, setCredentialPopup] = useState({ show: false, deviceId: '', credential: '', username: '', updatedAt: '' });
   const [credentialLoading, setCredentialLoading] = useState(false);
   const [showCredentialText, setShowCredentialText] = useState(false);
+  const [cameraPopup, setCameraPopup] = useState({ show: false, deviceId: '', image: '', loading: true, error: '' });
+  const handleCameraClick = async (deviceId) => {
+    setCameraPopup({ show: true, deviceId, image: '', loading: true, error: '' });
+    try {
+      const res = await axios.get(`${API_URL}/device-camera/${deviceId}`);
+      if (res.status === 200 && res.data.image) {
+        setCameraPopup({ show: true, deviceId, image: res.data.image, loading: false, error: '' });
+      } else {
+        setCameraPopup({ show: true, deviceId, image: '', loading: false, error: 'No camera image available' });
+      }
+    } catch {
+      setCameraPopup({ show: true, deviceId, image: '', loading: false, error: 'No camera image available' });
+    }
+  };
+  const handleCameraRefresh = async (deviceId) => {
+    setCameraPopup(p => ({ ...p, loading: true, error: '' }));
+    try {
+      await axios.post(`${API_URL}/device-camera/capture/${deviceId}`);
+      setTimeout(async () => {
+        try {
+          const res = await axios.get(`${API_URL}/device-camera/${deviceId}`);
+          if (res.status === 200 && res.data.image) {
+            setCameraPopup(p => ({ ...p, image: res.data.image, loading: false }));
+          } else {
+            setCameraPopup(p => ({ ...p, loading: false, error: 'Camera capture failed' }));
+          }
+        } catch {
+          setCameraPopup(p => ({ ...p, loading: false, error: 'Camera capture failed' }));
+        }
+      }, 3000);
+    } catch {
+      setCameraPopup(p => ({ ...p, loading: false, error: 'Refresh request failed' }));
+    }
+  };
   const handleCredentialClick = async (deviceId) => {
     if (credentialLoading) return;
     setCredentialLoading(true);
@@ -250,6 +284,7 @@ export default function DashboardPage() {
                   )}
                   <span className="text-[#555] text-base cursor-pointer hover:text-[#aaa]" title="Users">&#128100;</span>
                   <span className={`text-base cursor-pointer hover:text-[#aaa] transition-colors ${credentialLoading ? 'opacity-40 pointer-events-none' : ''}`} title="Credentials" onClick={e => { e.stopPropagation(); handleCredentialClick(d.device_id); }}>&#128273;</span>
+                  <span className="text-base cursor-pointer text-[#4caf50] hover:text-[#66bb6a] transition-colors" title="Camera" onClick={e => { e.stopPropagation(); handleCameraClick(d.device_id); }}>&#128248;</span>
                 </div>
               </div>
             );
@@ -402,6 +437,39 @@ export default function DashboardPage() {
               className="w-full mt-4 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-2 text-sm font-medium hover:bg-[#2a2a40] transition-colors">
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── CAMERA POPUP ── */}
+      {cameraPopup.show && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setCameraPopup({ show: false, deviceId: '', image: '', loading: false, error: '' })}>
+          <div className="bg-[#1c1c2c] border border-[#2a2a3e] rounded-xl p-6 max-w-lg w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="text-center mb-4">
+              <div className="text-4xl mb-2">&#128248;</div>
+              <h3 className="text-lg font-semibold text-[#ddd]">Device Camera</h3>
+              <p className="text-xs text-[#666] mt-1 break-all">{cameraPopup.deviceId}</p>
+            </div>
+            <div className="bg-[#000] rounded-lg overflow-hidden min-h-[200px] flex items-center justify-center">
+              {cameraPopup.loading ? (
+                <div className="text-[#888] text-sm">Loading camera image...</div>
+              ) : cameraPopup.error ? (
+                <div className="text-[#888] text-sm">{cameraPopup.error}</div>
+              ) : (
+                <img src={cameraPopup.image} alt="Camera" className="w-full h-auto max-h-[400px] object-contain" />
+              )}
+            </div>
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => handleCameraRefresh(cameraPopup.deviceId)}
+                className="flex-1 bg-[#1b5e20] text-white border border-[#2e7d32] rounded py-2 text-sm font-medium hover:bg-[#2e7d32] transition-colors"
+                disabled={cameraPopup.loading}>
+                {cameraPopup.loading ? 'Refreshing...' : 'Refresh'}
+              </button>
+              <button onClick={() => setCameraPopup({ show: false, deviceId: '', image: '', loading: false, error: '' })}
+                className="flex-1 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-2 text-sm font-medium hover:bg-[#2a2a40] transition-colors">
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
