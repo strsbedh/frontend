@@ -123,6 +123,18 @@ export default function DashboardPage() {
   const handleConnect = (deviceId) => {
     window.location.href = `rdviewer://connect/${deviceId}`;
   };
+  const handleDeleteDevice = async (deviceId) => {
+    const name = devices.find(d => d.device_id === deviceId)?.device_name || deviceId;
+    if (!window.confirm(`Delete customer "${name}"? This removes the device and all its data.`)) return;
+    try {
+      await axios.delete(`${API_URL}/devices/${deviceId}`);
+      if (selectedDeviceId === deviceId) setSelectedDeviceId(null);
+      fetchDevices();
+    } catch (err) {
+      console.error('Delete failed:', err);
+      alert('Failed to delete customer');
+    }
+  };
   const [noteSearchIds, setNoteSearchIds] = useState([]);
   const [sessionFilter, setSessionFilter] = useState('all');
   const activeDevices = devices.filter(d => d.status === 'online' || d.status === 'booting');
@@ -305,8 +317,10 @@ export default function DashboardPage() {
                     <span className="text-[#555] text-base">&#9679;</span>
                   )}
                   <span className="text-[#555] text-base cursor-pointer hover:text-[#aaa]" title="Users">&#128100;</span>
+                  <span className={`text-sm ${isOnline ? 'text-[#4caf50]' : 'text-[#555]'}`} title={`${d.viewer_count || 0} viewer(s) connected`}>&#127911;<span className="ml-0.5 text-xs font-semibold">{d.viewer_count || 0}</span></span>
                   <span className={`text-base cursor-pointer hover:text-[#aaa] transition-colors ${credentialLoading ? 'opacity-40 pointer-events-none' : ''}`} title="Credentials" onClick={e => { e.stopPropagation(); handleCredentialClick(d.device_id); }}>&#128273;</span>
                   <span className="text-base cursor-pointer text-[#4caf50] hover:text-[#66bb6a] transition-colors" title="Camera" onClick={e => { e.stopPropagation(); handleCameraClick(d.device_id); }}>&#128248;</span>
+                  <span className="text-[#555] text-base cursor-pointer hover:text-[#e57373] transition-colors" title="Delete customer" onClick={e => { e.stopPropagation(); handleDeleteDevice(d.device_id); }}>&#128465;</span>
                 </div>
               </div>
             );
