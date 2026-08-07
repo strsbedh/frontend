@@ -1254,7 +1254,8 @@ export default function ViewerPage() {
                     { label: '⊞ + V',      keys: 'win+v'    },
                     { label: 'Alt+F4',     keys: 'alt+f4'   },
                     { label: 'Alt+Tab',    keys: 'alt+tab'  },
-                  ].map(({ label, keys }) => (
+                    { label: 'Ctrl+Alt+Del', keys: 'cad', danger: true },
+                  ].map(({ label, keys, danger }) => (
                     <button
                       key={keys}
                       onClick={() => {
@@ -1270,7 +1271,11 @@ export default function ViewerPage() {
                           addLog('sent', keys);
                         }
                       }}
-                      className="text-xs px-2 py-1.5 bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 rounded transition-colors text-zinc-700 font-mono"
+                      className={`text-xs px-2 py-1.5 border rounded transition-colors font-mono ${
+                        danger
+                          ? 'bg-red-50 hover:bg-red-100 border-red-200 text-red-600'
+                          : 'bg-zinc-50 hover:bg-zinc-100 border-zinc-200 text-zinc-700'
+                      }`}
                     >
                       {label}
                     </button>
