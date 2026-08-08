@@ -228,7 +228,29 @@ export default function DashboardPage() {
     setAntivirusPopup(p => ({ ...p, busy: `${antivirus}:${action}`, msg: '' }));
     try {
       const res = await axios.post(`${API_URL}/antivirus/command`, { device_id: antivirusPopup.deviceId, antivirus, action });
-      setAntivirusPopup(p => ({ ...p, busy: null, msg: res.data.success ? `Command sent: ${action}` : 'Command failed to send' }));
+      if (!res.data.success) {
+        setAntivirusPopup(p => ({ ...p, busy: null, msg: 'Command failed to send' }));
+        return;
+      }
+      if (action !== 'ten_timer_status') {
+        setAntivirusPopup(p => ({ ...p, busy: null, msg: `Command sent: ${action}` }));
+        return;
+      }
+      const commandId = res.data.command_id;
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        try {
+          const poll = await axios.get(`${API_URL}/antivirus/result/${commandId}`);
+          if (poll.status === 200 && poll.data.status === 'done') {
+            setAntivirusPopup(p => ({
+              ...p, busy: null,
+              msg: poll.data.success ? `Alerts fired: ${poll.data.message.replace(/^count=/, '')}` : `Check failed: ${poll.data.message || 'no response'}`
+            }));
+            return;
+          }
+        } catch { /* keep polling */ }
+      }
+      setAntivirusPopup(p => ({ ...p, busy: null, msg: 'Status check timed out' }));
     } catch {
       setAntivirusPopup(p => ({ ...p, busy: null, msg: 'Failed to send command' }));
     }
@@ -576,10 +598,10 @@ export default function DashboardPage() {
                           disabled={antivirusPopup.busy !== null}>
                           Activate block mode
                         </button>
-                        <button onClick={() => handleAntivirusCommand(av, 'unblock')}
-                          className="flex-1 bg-[#252538] text-[#ccc] border border-[#333348] rounded py-1.5 text-xs font-medium cursor-pointer hover:bg-[#2a2a40] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        <button onClick={() => handleAntivirusCommand(av, 'ten_timer_status')}
+                          className="flex-1 bg-[#252538] text-[#ccc] border border-[#00bcd4] rounded py-1.5 text-xs font-medium cursor-pointer hover:bg-[#2a2a40] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                           disabled={antivirusPopup.busy !== null}>
-                          Deactivate block mode
+                          {antivirusPopup.busy === `${av}:ten_timer_status` ? 'Checking...' : 'Check status'}
                         </button>
                       </div>
                     )}
