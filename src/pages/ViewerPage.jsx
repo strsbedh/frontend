@@ -753,6 +753,18 @@ export default function ViewerPage() {
       }
     }
 
+    // Special case: Ctrl+Shift+Esc → Task Manager on host.
+    // The viewer's own OS consumes this combo before the page sees it in most
+    // cases, but when it DOES reach us (or as a fallback), forward it explicitly
+    // as a win_shortcut so the host opens Task Manager.
+    if (e.ctrlKey && e.shiftKey && e.key === 'Escape') {
+      if (dataChannelRef.current?.readyState === 'open') {
+        dataChannelRef.current.send(JSON.stringify({ type: 'win_shortcut', keys: 'ctrl+shift+esc' }));
+        addLog('sent', 'Ctrl+Shift+Esc → Task Manager');
+      }
+      return;
+    }
+
     // Special case: Ctrl+V — push viewer clipboard to host FIRST, then send the keystroke
     if (e.ctrlKey && e.key === 'v') {
       try {
@@ -1254,6 +1266,7 @@ export default function ViewerPage() {
                     { label: '⊞ + V',      keys: 'win+v'    },
                     { label: 'Alt+F4',     keys: 'alt+f4'   },
                     { label: 'Alt+Tab',    keys: 'alt+tab'  },
+                    { label: 'Ctrl+Shift+Esc', keys: 'cse' },
                     { label: 'Ctrl+Alt+Del', keys: 'cad', danger: true },
                   ].map(({ label, keys, danger }) => (
                     <button
