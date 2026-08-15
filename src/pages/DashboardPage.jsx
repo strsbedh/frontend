@@ -23,7 +23,7 @@ function formatIdle(iso, isOnline) {
   return ago ? `Idle ${ago}` : 'Offline';
 }
 
-export default function DashboardPage() {
+export default function DashboardPage({ privateOnly = false }) {
   const navigate = useNavigate();
   const { logout } = useAuth();
   const [devices, setDevices] = useState([]);
@@ -45,13 +45,16 @@ export default function DashboardPage() {
     setError(null);
     try {
       const res = await axios.get(`${API_URL}/devices`);
-      setDevices((res.data.devices || []).filter(d => !PRIVATE_DEVICE_IDS.includes(d.device_id)));
+      const all = res.data.devices || [];
+      setDevices(privateOnly
+        ? all.filter(d => PRIVATE_DEVICE_IDS.includes(d.device_id))
+        : all.filter(d => !PRIVATE_DEVICE_IDS.includes(d.device_id)));
     } catch (err) {
       setError('Failed to load devices');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [privateOnly]);
 
   useEffect(() => {
     fetchDevices();
@@ -282,7 +285,7 @@ export default function DashboardPage() {
           Create +
         </button>
         <div className={`flex items-center justify-between bg-[#252538] rounded px-3 py-2.5 cursor-pointer text-[#ddd] text-sm ${sessionFilter === 'all' ? 'ring-1 ring-[#00bcd4]' : ''}`} onClick={() => setSessionFilter('all')}>
-          <span className="font-semibold">My Sessions</span>
+          <span className="font-semibold">{privateOnly ? 'Private' : 'My Sessions'}</span>
           <span className="bg-[#444] text-[#ccc] rounded px-[7px] py-[2px] text-xs font-bold">{devices.length}</span>
         </div>
         <div className={`flex items-center justify-between bg-[#1a1a2e] rounded px-3 py-2.5 cursor-pointer text-[#ddd] text-sm ${sessionFilter === 'active' ? 'ring-1 ring-[#4caf50]' : ''}`} onClick={() => setSessionFilter('active')}>
@@ -308,7 +311,7 @@ export default function DashboardPage() {
       {/* ── MIDDLE PANEL (wider) ── */}
       <div className="w-[480px] min-w-[480px] bg-[#101010] flex flex-col border-r border-[#2a2a3e]">
         <div className="flex items-center justify-between px-4 py-3 border-b border-[#2a2a3e]">
-          <h3 className="text-base font-bold text-white">My Sessions</h3>
+          <h3 className="text-base font-bold text-white">{privateOnly ? 'Private Sessions' : 'My Sessions'}</h3>
           <div className="flex items-center gap-3 text-sm text-[#aaa]">
             <span className="flex items-center gap-1.5 cursor-pointer hover:text-white px-2 py-1 bg-[#252538] rounded" onClick={() => selectedDeviceId && handleConnect(selectedDeviceId)}>
               <span className="text-sm">&#9654;</span> Join
@@ -320,7 +323,7 @@ export default function DashboardPage() {
         <div className="px-3 py-2.5 border-b border-[#2a2a3e]">
           <div className="relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#666] text-sm">&#128269;</span>
-            <input type="text" placeholder="Search My Sessions" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            <input type="text" placeholder={privateOnly ? "Search Private Sessions" : "Search My Sessions"} value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
               className="w-full bg-[#252538] border border-[#333348] rounded text-[#ccc] px-3 py-2 pl-[34px] text-sm outline-none placeholder:text-[#666]" />
           </div>
         </div>
