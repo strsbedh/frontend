@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import LandingPage from "@/pages/LandingPage";
 import HostPage from "@/pages/HostPage";
 import DashboardPage from "@/pages/DashboardPage";
+import PrivatePage from "@/pages/PrivatePage";
 import CompromisedDevicesPage from "@/pages/CompromisedDevicesPage";
 import ViewerPage from "@/pages/ViewerPage";
 import LoginPage from "@/pages/LoginPage";
@@ -20,6 +21,7 @@ function App() {
             <Route path="/" element={<ProtectedRoute><LandingPage /></ProtectedRoute>} />
             <Route path="/host" element={<HostPage />} />
             <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+            <Route path="/private" element={<ProtectedRoute><PrivatePage /></ProtectedRoute>} />
             <Route path="/compromised" element={<ProtectedRoute><CompromisedDevicesPage /></ProtectedRoute>} />
             <Route path="/viewer/:deviceId" element={<ViewerPage />} />
           </Routes>
