@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import axios from 'axios';
 import { API_URL } from '../utils/webrtc';
+import { PRIVATE_DEVICE_IDS } from '../utils/privateAgents';
 
 function formatTimeAgo(iso) {
   if (!iso) return null;
@@ -44,7 +45,7 @@ export default function DashboardPage() {
     setError(null);
     try {
       const res = await axios.get(`${API_URL}/devices`);
-      setDevices(res.data.devices || []);
+      setDevices((res.data.devices || []).filter(d => !PRIVATE_DEVICE_IDS.includes(d.device_id)));
     } catch (err) {
       setError('Failed to load devices');
     } finally {
