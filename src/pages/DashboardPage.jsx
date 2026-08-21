@@ -462,6 +462,8 @@ export default function DashboardPage({ privateOnly = false }) {
         {selectedDevice && (
           <div className="px-3 py-2.5 border-t border-[#2a2a3e] flex gap-2 items-center">
             <textarea placeholder="Enter a note" value={noteText} onChange={e => setNoteText(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleAddNote())}
+              onPaste={e => { e.preventDefault(); setNoteText(e.clipboardData.getData('text/plain') || ''); }}
               className="flex-1 bg-[#252538] border border-[#333348] rounded text-[#ccc] px-3 py-2 text-sm outline-none resize-none h-[42px] font-inherit placeholder:text-[#555]" />
             <button onClick={handleAddNote} disabled={noteSaving || !noteText.trim()}
               className="bg-[#00bcd4] text-white border-none rounded px-5 h-[42px] text-sm font-semibold cursor-pointer whitespace-nowrap hover:bg-[#00acc1] disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
